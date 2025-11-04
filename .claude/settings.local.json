@@ -15,7 +15,8 @@
       "Bash(fi)",
       "Bash(lsof:*)",
       "Bash(python app.py:*)",
-      "Bash(pip3 install:*)"
+      "Bash(pip3 install:*)",
+      "Bash(git init:*)"
     ],
     "deny": [],
     "ask": []

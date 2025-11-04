@@ -29,13 +29,10 @@ tds_ds_env_vars.sh
 .env
 *.env
 
-# Data files (may contain PHI)
-data/raw/*.csv
-data/processed/*.csv
+# Data and results folders (keep local only)
+data/
+results/
 642_CDI_queries*.csv
-
-# Results (evaluation outputs - include in repo for reference)
-# results/*.csv and results/*.json are now ALLOWED
 
 # Jupyter Notebooks checkpoints
 .ipynb_checkpoints/
@@ -48,6 +45,7 @@ data/processed/*.csv
 # IDE
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
 *~
