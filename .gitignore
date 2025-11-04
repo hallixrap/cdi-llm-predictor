@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+venv/
+env/
+ENV/
+
+# Environment variables (CONTAINS SENSITIVE API KEYS!)
+env_vars.sh
+tds_ds_env_vars.sh
+.env
+*.env
+
+# Data files (may contain PHI)
+data/raw/*.csv
+data/processed/*.csv
+results/*.csv
+results/*.json
+642_CDI_queries*.csv
+
+# Jupyter Notebooks checkpoints
+.ipynb_checkpoints/
+
+# MacOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp

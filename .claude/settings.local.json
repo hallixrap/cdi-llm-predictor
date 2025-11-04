@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python scripts/01_explore_data.py:*)",
+      "Bash(python3:*)",
+      "Bash(source:*)",
+      "Bash(pip install:*)",
+      "Read(//Users/chukanya/Documents/Coding/CDI_Prototype/**)",
+      "Bash(chmod:*)",
+      "Read(//tmp/**)",
+      "Bash(cat:*)",
+      "Bash(if [ -z \"$STANFORD_API_KEY\" ])",
+      "Bash(then echo \"STANFORD_API_KEY is not set\")",
+      "Bash(else echo \"STANFORD_API_KEY is set (length: $#STANFORD_API_KEY characters)\")",
+      "Bash(fi)",
+      "Bash(lsof:*)",
+      "Bash(python app.py:*)",
+      "Bash(pip3 install:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

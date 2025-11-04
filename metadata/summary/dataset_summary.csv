@@ -1,0 +1,2 @@
+total_examples,unique_patients,date_range,avg_diagnoses_per_query,median_days_after_discharge
+539,359,2024-01-01T13:04:00 to 2024-04-11T13:32:00,1.0217391304347827,0

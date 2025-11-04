@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CDI LLM Predictor - Stanford Healthcare</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            color: #8C1515;
+            font-size: 32px;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            color: #666;
+            font-size: 16px;
+        }
+
+        .main-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        @media (max-width: 1024px) {
+            .main-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            padding: 25px;
+        }
+
+        .card h2 {
+            color: #333;
+            font-size: 20px;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .badge {
+            background: #8C1515;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            color: #555;
+            font-weight: 600;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        input[type="text"],
+        textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: inherit;
+            transition: border-color 0.3s;
+        }
+
+        input[type="text"]:focus,
+        textarea:focus {
+            outline: none;
+            border-color: #8C1515;
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 400px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: #8C1515;
+            color: white;
+            flex: 1;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: #6d0e0e;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(140, 21, 21, 0.3);
+        }
+
+        .btn-secondary {
+            background: #f0f0f0;
+            color: #333;
+        }
+
+        .btn-secondary:hover {
+            background: #e0e0e0;
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .results-container {
+            min-height: 300px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #8C1515;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error {
+            background: #fee;
+            border: 2px solid #fcc;
+            border-radius: 8px;
+            padding: 15px;
+            color: #c33;
+            margin-bottom: 20px;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #999;
+        }
+
+        .empty-state svg {
+            width: 80px;
+            height: 80px;
+            margin-bottom: 20px;
+            opacity: 0.3;
+        }
+
+        .diagnosis-list {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .diagnosis-item {
+            background: #f8f9fa;
+            border-left: 4px solid #8C1515;
+            border-radius: 8px;
+            padding: 15px;
+            transition: all 0.3s;
+        }
+
+        .diagnosis-item:hover {
+            background: #f0f1f2;
+            transform: translateX(5px);
+        }
+
+        .diagnosis-title {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+            font-size: 15px;
+        }
+
+        .diagnosis-evidence {
+            color: #666;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .stats {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .stats-number {
+            font-size: 48px;
+            font-weight: 700;
+            margin-bottom: 5px;
+        }
+
+        .stats-label {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        .info-box {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            color: #1565c0;
+        }
+
+        .api-key-hint {
+            font-size: 12px;
+            color: #999;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>🏥 CDI LLM Predictor</h1>
+            <p>Stanford Healthcare - Clinical Documentation Integrity Assistant</p>
+        </div>
+
+        <!-- Main Grid -->
+        <div class="main-grid">
+            <!-- Left Column: Input -->
+            <div class="card">
+                <h2>
+                    📝 Discharge Summary
+                    <span class="badge">INPUT</span>
+                </h2>
+
+                <div class="info-box">
+                    <strong>How it works:</strong> Paste a discharge summary below and the AI will identify diagnoses that may be clinically supported but missing or unclear in the documentation.
+                </div>
+
+                <div class="form-group">
+                    <label for="api-key">Stanford API Key:</label>
+                    <input
+                        type="text"
+                        id="api-key"
+                        placeholder="Enter your Stanford PHI-safe API key"
+                        value="5f57674c921c459aa144c7e35360a735"
+                    >
+                    <div class="api-key-hint">
+                        🔒 Requires Stanford VPN connection
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="discharge-summary">Discharge Summary Text:</label>
+                    <textarea
+                        id="discharge-summary"
+                        placeholder="Paste discharge summary here...&#10;&#10;Or click 'Load Sample' to see an example."
+                    ></textarea>
+                </div>
+
+                <div class="button-group">
+                    <button class="btn-primary" id="analyze-btn" onclick="analyzeSummary()">
+                        🔍 Analyze for CDI Opportunities
+                    </button>
+                    <button class="btn-secondary" onclick="loadSample()">
+                        📋 Load Sample
+                    </button>
+                    <button class="btn-secondary" onclick="clearForm()">
+                        🗑️ Clear
+                    </button>
+                </div>
+            </div>
+
+            <!-- Right Column: Results -->
+            <div class="card">
+                <h2>
+                    🎯 CDI Query Opportunities
+                    <span class="badge">RESULTS</span>
+                </h2>
+
+                <div class="results-container" id="results">
+                    <div class="empty-state">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M9 2a1 1 0 0 0-.894.553L7.382 4H4a1 1 0 0 0-1 1v3a1 1 0 0 0 .553.894L4 9.618V13a1 1 0 0 0 .553.894L5 14.618V19a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-4.382l.447-.224A1 1 0 0 0 20 13V9.618l.447-.224A1 1 0 0 0 21 8V5a1 1 0 0 0-1-1h-3.382l-.724-1.447A1 1 0 0 0 15 2H9zm0 2h6l.5 1H17v2l-.5.5H17v3l-.5.5H17v4H7v-4h.5l-.5-.5V7h.5L7 6.5V4h1.5L9 4z"/>
+                        </svg>
+                        <h3>No Analysis Yet</h3>
+                        <p>Enter a discharge summary and click "Analyze" to see CDI opportunities</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function analyzeSummary() {
+            const apiKey = document.getElementById('api-key').value.trim();
+            const dischargeSummary = document.getElementById('discharge-summary').value.trim();
+            const resultsDiv = document.getElementById('results');
+            const analyzeBtn = document.getElementById('analyze-btn');
+
+            // Validation
+            if (!apiKey) {
+                alert('Please enter your Stanford API key');
+                return;
+            }
+
+            if (!dischargeSummary) {
+                alert('Please enter a discharge summary');
+                return;
+            }
+
+            // Show loading state
+            analyzeBtn.disabled = true;
+            resultsDiv.innerHTML = `
+                <div class="loading">
+                    <div class="spinner"></div>
+                    <p>Analyzing discharge summary with GPT-4.1...</p>
+                    <p style="font-size: 12px; color: #999; margin-top: 10px;">This may take 5-10 seconds</p>
+                </div>
+            `;
+
+            try {
+                const response = await fetch('/api/predict', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        api_key: apiKey,
+                        discharge_summary: dischargeSummary
+                    })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to analyze discharge summary');
+                }
+
+                // Display results
+                displayResults(data);
+
+            } catch (error) {
+                resultsDiv.innerHTML = `
+                    <div class="error">
+                        <strong>❌ Error:</strong> ${error.message}
+                        <br><br>
+                        <small>
+                        ${error.message.includes('401') || error.message.includes('subscription') ?
+                            'Please check:<br>1. You are connected to Stanford VPN<br>2. Your API key is valid' :
+                            'Please try again or contact support'}
+                        </small>
+                    </div>
+                `;
+            } finally {
+                analyzeBtn.disabled = false;
+            }
+        }
+
+        function displayResults(data) {
+            const resultsDiv = document.getElementById('results');
+            const diagnoses = data.diagnoses || [];
+
+            if (diagnoses.length === 0) {
+                resultsDiv.innerHTML = `
+                    <div class="empty-state">
+                        <h3>✅ No CDI Opportunities Found</h3>
+                        <p>The discharge summary appears to be well-documented with no obvious missing diagnoses.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            let html = `
+                <div class="stats">
+                    <div class="stats-number">${diagnoses.length}</div>
+                    <div class="stats-label">Potential CDI Queries Identified</div>
+                </div>
+                <div class="diagnosis-list">
+            `;
+
+            diagnoses.forEach((dx, index) => {
+                html += `
+                    <div class="diagnosis-item">
+                        <div class="diagnosis-title">
+                            ${index + 1}. ${dx.diagnosis}
+                        </div>
+                        <div class="diagnosis-evidence">
+                            <strong>Clinical Evidence:</strong> ${dx.clinical_evidence}
+                        </div>
+                    </div>
+                `;
+            });
+
+            html += '</div>';
+            resultsDiv.innerHTML = html;
+        }
+
+        async function loadSample() {
+            try {
+                const response = await fetch('/api/sample');
+                const data = await response.json();
+                document.getElementById('discharge-summary').value = data.sample;
+            } catch (error) {
+                alert('Failed to load sample: ' + error.message);
+            }
+        }
+
+        function clearForm() {
+            document.getElementById('discharge-summary').value = '';
+            document.getElementById('results').innerHTML = `
+                <div class="empty-state">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M9 2a1 1 0 0 0-.894.553L7.382 4H4a1 1 0 0 0-1 1v3a1 1 0 0 0 .553.894L4 9.618V13a1 1 0 0 0 .553.894L5 14.618V19a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-4.382l.447-.224A1 1 0 0 0 20 13V9.618l.447-.224A1 1 0 0 0 21 8V5a1 1 0 0 0-1-1h-3.382l-.724-1.447A1 1 0 0 0 15 2H9zm0 2h6l.5 1H17v2l-.5.5H17v3l-.5.5H17v4H7v-4h.5l-.5-.5V7h.5L7 6.5V4h1.5L9 4z"/>
+                    </svg>
+                    <h3>No Analysis Yet</h3>
+                    <p>Enter a discharge summary and click "Analyze" to see CDI opportunities</p>
+                </div>
+            `;
+        }
+
+        // Allow Enter key in textarea (Shift+Enter for analyze)
+        document.getElementById('discharge-summary').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && e.shiftKey) {
+                e.preventDefault();
+                analyzeSummary();
+            }
+        });
+    </script>
+</body>
+</html>

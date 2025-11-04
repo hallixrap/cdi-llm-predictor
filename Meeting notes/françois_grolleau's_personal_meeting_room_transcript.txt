@@ -1,0 +1,422 @@
+Francois | 02:59
+He Joe, how's it going?
+Chukwuebuka Anyaegbuna | 03:00
+Hey, man, that's a guy. Yeah, good, how are you?
+Francois | 03:03
+Good, thank you. I did we were you in the same meeting, like, just before?
+Chukwuebuka Anyaegbuna | 03:07
+Yes, I will confess, if they don't hook me at the start, I find it very hard to disengage. I find it very easy to disengage.
+Francois | 03:17
+Yeah, same for me. And I actually joined like thirty minutes late because I was, you know, finishing up another meeting and then. Yeah, I never got into it.
+Chukwuebuka Anyaegbuna | 03:26
+Yeah, I just have no idea what they were talking about. How's things in your world?
+Francois | 03:34
+Im going okay. I'm just trying to wrap up my current projects with very different things. Yeah, so today, what did you want to talk about? The billing?
+Chukwuebuka Anyaegbuna | 03:43
+Yes. Yes.
+Francois | 03:46
+Billing code S?
+Chukwuebuka Anyaegbuna | 03:47
+Yeah. So let me share with you this thing. I actually need to connect to Stanford vim and with me.
+Francois | 03:58
+No.
+Chukwuebuka Anyaegbuna | 04:00
+Yeah, I need to disconnect for a little bit, but just so I can show you this on this side and then.
+Francois | 04:03
+Two.
+Chukwuebuka Anyaegbuna | 04:05
+Yeah, I'd love to kind of hear more a little bit about my GE brief and like, where is it going next? Because, yeah, it feels like it's a bit stuck. I think the last time we talked about it was like deciding on priorities between what nigger wanted to do what? Rolling it out to additional hospitals and adding this billing encoding.
+Francois | 04:20
+Yeah, I think it's probably because you OOP it cut off. Now I think I can hear you.
+Chukwuebuka Anyaegbuna | 04:25
+Concept C.
+Yeah. So it's going to break up for a second. Two seconds. Okay, have frozen. So I think it's working. Yeah, are you back? Can you hear me? Can you see those?
+Francois | 04:52
+And yes, and I can see you. Screen and I can see you.
+Chukwuebuka Anyaegbuna | 04:56
+Yes, I am perfect. So yeah, just high level. This is the thing that would be vibcoded, which is take a discharge summary and in what are the high-value CDI queries that these discharge summaries typically have associated with them?
+Plus, what are the common relevant clinical conditions? Do you know what RSI is?
+Francois | 05:26
+No, I've heard of it.
+Chukwuebuka Anyaegbuna | 05:26
+No, it's so just.
+Francois | 05:28
+And what is that again?
+Chukwuebuka Anyaegbuna | 05:28
+Yeah, it's a short code that clinicians write in the discharge summary. R CC and then it goes.
+Francois | 05:29
+Like I've known it, I guess, but for about.
+Chukwuebuka Anyaegbuna | 05:36
+It gives them a list and it goes system by system, and then they click on the things that the patient had on admission.
+Francois | 05:41
+Yeah, I remember now.
+Chukwuebuka Anyaegbuna | 05:42
+Yeah. So basically, what we did is I got a bunch of stuff downloaded. Let me see if I can open one of them for you.
+Francois | 05:52
+So you boycotted this yourself?
+Chukwuebuka Anyaegbuna | 05:52
+As. Yeah.
+Francois | 05:56
+Okay, cool. That's great.
+Chukwuebuka Anyaegbuna | 05:57
+So let's do the whole screen so I can show you. There was a bunch of data that we had.
+Like I said, these are if it opens up for me. So, for example, this is the CDI query, which is after reviewing the clinical information, I've determined the diagnosis clarification below is clinically valid.
+So in this case, it's functional quadra-gum. This is the discharge summary that's associated with that query. So.
+Francois | 06:36
+So, yeah. So I guess this is extracted from a Q query to our database.
+And then you. You don't load the like, the file and.
+Chukwuebuka Anyaegbuna | 06:45
+Yeah, and I just asked Claude to basically review the list of Circadi queries. What are the things that you can detect just on a narrative basis? What is high frequency and high value diagnosis?
+And then build a script that looks for those things.
+Francois | 07:05
+He.
+Chukwuebuka Anyaegbuna | 07:07
+So the key thing here is just as a prompt, based on... Thank you for the AM API call documents. That was really easy for it to work with.
+Then, yeah, so these are the questions. This is the prompt. It's like you need to identify and diagnose that are clinically supported. These are the most specific, highest specificity. Then, it has a list of the common stuff that it either finds in RCC or in the CDI codes.
+Then, it's like, yeah, and then it asks for the discharge summary and then which ultimately leads to this. It's like, "Okay, so you load this discharge summary and then you analyze for CDI opportunities, and then it gives you a list of things and then a bunch of... Not building codes, but diagnoses.
+Francois | 08:00
+Okay, so just to clarify, so as the input, it takes a discharge scenario as input and it outputs, like, building codes and diagnosis.
+Chukwuebuka Anyaegbuna | 08:14
+So high-value diagnoses that are missed. Typically, we use some data from the CDI people, so documents coding.
+Francois | 08:23
+Okay.
+Chukwuebuka Anyaegbuna | 08:26
+So that one.
+Francois | 08:27
+And the data from the Circadi people, like references. I guess the most high-value diagnoses that are often missed or something like this. Like, a short list of.
+Chukwuebuka Anyaegbuna | 08:34
+Exactly right, so, yeah, so this is it.
+Francois | 08:37
+Okay, I see. So basically, you... So just to make sure I understand. So what's going on is like you have an LLM running in the back end, like a secure GPT LLM that just cross-checks the free text that you provide as input to the UI, often it's a discloser, certainly, but it could be anything, I guess.
+Chukwuebuka Anyaegbuna | 08:43
+Yeah.
+Francois | 08:59
+And then it comes up with a structured format, like JSON or whatever, that is finally converted into this list of high-value diagnoses that correspond and are present in the provided text.
+Chukwuebuka Anyaegbuna | 09:08
+Y you've got it.
+Francois | 09:11
+Is that what's going on?
+Chukwuebuka Anyaegbuna | 09:14
+Exactly. That's really simple and really easy, and nothing spectacular is going on behind the scenes.
+Francois | 09:16
+Okay. eight.
+Chukwuebuka Anyaegbuna | 09:20
+Took took me and embarrassingly long time to do it together because I was getting weird errors and stuff.
+But yeah. So it's not super. This is why I was asking some of those questions yesterday because it's just narrative-based. There are a bunch of queries that CDI pushes that ask doctors, but it's based on stuff that they see in the rest of the chart.
+It keeps asking, for example, a common thing that comes up as acute lactic acidosis, and clinicians don't often write the lactate within the narrative. So I assume the CDI people are finding that within the labs and querying on that basis.
+So basically, yeah, it just takes the narrative and it looks to compare it to the high-value diagnoses and the criteria we have for that and then surfaces them. But it misses out on a huge chunk of the stuff that's lab test based.
+Francois | 10:14
+I see. Okay, so, yeah, I understand, like the workflow, what's going on and like, the asks from, you know, Kevin Truman and all this, and.
+Chukwuebuka Anyaegbuna | 10:28
+Yeah.
+Francois | 10:28
+So how can I be the most useful for you at this point? Do you... What do you think?
+Chukwuebuka Anyaegbuna | 10:34
+Yeah.
+Francois | 10:35
+Would be useful for you to know.
+Chukwuebuka Anyaegbuna | 10:35
+I think it's... So what is an honest opinion about... Is it actually plausible if we think about that to combine what you've already built and adding this on top of it, which is to review all of the progress notes, extract diagnoses, and push that to the clinicians via emails with the ultimate goal of reducing downstream CIRD queries? Is that like.
+Francois | 11:08
+Yeah.
+Chukwuebuka Anyaegbuna | 11:09
+Is that possible? Do we have capacity?
+What's... Yeah.
+Francois | 11:14
+So? I think it's a separate project. I think we should not merge the two things. So that's my take on this, for the main reason is not technical.
+It's like, right now, the project that I've worked on is scoped as a project, and I teamed up with the TEDS Data team.
+Chukwuebuka Anyaegbuna | 11:26
+Yeah.
+Francois | 11:35
+There's like one Designated person for this, which is t who is timoticize.
+And if and so there's not very like we don't have very much room like there to just like do something else.
+Chukwuebuka Anyaegbuna | 11:39
+Yeah.
+Francois | 11:45
+We'll if we do this, we're just gonna lose all the trust that we have like, you know, between a two teams and we have much more to lose there than to win on the other hand.
+Chukwuebuka Anyaegbuna | 11:46
+Yeah. Yeah. Yeah.
+Francois | 11:56
+So from the technical standpoint, I think there's... It's not perfectly aligned like that. There are things that don't work exactly the same.
+So this is all me trying to be blunt and direct.
+On the other hand, this is the positive side of this. There's a lot of material that we can directly reuse. We have experience now from this previous pilot that works through deployment and was used by users.
+So if I were to do it again for an overused case, I would do it differently and I would directly call the FIRE API. Right now, instead of teaming up, having this complicated admin process of teaming up with the TED S data science team and asking for access, we basically had to wait for months until I got access to your patient data. It lives like that's not anonymized data we need for a production system.
+Chukwuebuka Anyaegbuna | 12:48
+Yeah.
+Francois | 12:52
+We actually already have access to the system. Now like to this kind of data now via for your IP calls the same kind of thing that and that's very recent take.
+Chukwuebuka Anyaegbuna | 12:56
+Yeah.
+Francois | 13:01
+And so I can share my screen. So if I were to do it again, I would use that. Let me show you. Desktop.
+So that's the report from the lab and in this OOPs.
+Chukwuebuka Anyaegbuna | 13:25
+Yeah.
+Francois | 13:30
+So this document that I started drafting, which is just basically tells you, okay, how can you retrieve FIEL patient data live? How can you retrieve the notes?
+Eventually, we can retrieve anything. It's just a little bit of a pain to just build the endpoint for exactly what we want to retrieve. But we have access to that in the lab. So right now, it's like me, Riyochi, and Sandi have access.
+It's just one document that's like this. I can show it to you.
+Chukwuebuka Anyaegbuna | 13:56
+Nice.
+Francois | 14:00
+So that's the document that has all the passwords and stuff. So, this is... We can't share this publicly, but the group has access.
+Chukwuebuka Anyaegbuna | 14:11
+Yes.
+Francois | 14:13
+And this document, if you connect to the understanding for GPN, then we put together a bunch of Python functions that you can just basically call.
+Chukwuebuka Anyaegbuna | 14:17
+Yeah.
+Francois | 14:22
+So those functions are in a separate file over here.
+We can build more, but right now we have, I don't know, a couple of them. Maybe three or four that each function does one particular thing. For example, if you want to retrieve the discharge summary for one patient, you just provide the MRN for that patient. Where you want to save the output, like in what folder you want to save it.
+Then you say you want to retrieve all the dissums between that date, and then it automatically downloads all the dissums for that patient.
+Chukwuebuka Anyaegbuna | 14:50
+Yes.
+Francois | 14:54
+So we could easily build endpoints like this or any document that's relevant for you for your use case.
+If the use case is, for example, extract building codes, I would just basically build one function that just retrieves all the relevant information, and then from that, you feed it somewhat to the LLM, maybe through a few more than just one call.
+Chukwuebuka Anyaegbuna | 15:08
+Yeah.
+Francois | 15:17
+Maybe, it would be a sequence of calls depending on the goal, and the goal would be to ultimately generate the relevant building codes and we could start retrospectively using some patients for whom we know that the provided billing codes are accurate.
+Chukwuebuka Anyaegbuna | 15:19
+Yeah. Just my thing.
+Francois | 15:35
+You we can have just ten patients for whom we are just like multiple patients, cross-check this multiple doctors, cross-check this patient. We know the building codes are accurate. That's where we want to get for all the patients as well.
+Chukwuebuka Anyaegbuna | 15:49
+Yeah.
+Francois | 15:50
+And that would be all evil. So, we would just like for a small sample, we start with ten patients and end-to-end, we would try to predict for pipeline, LM generation, pipeline, those counts, gaining codes.
+Once that works and once we're happy with that, we can move on very quickly to deployment because the whole thing is directly set up for deployment. We completely bypass the partnership with EDS because we have access ourselves for our end, we don't even have to ask permission.
+So maybe that saves us basically three and.
+Chukwuebuka Anyaegbuna | 16:30
+Yeah. Az.
+Francois | 16:33
+And we could deliver it like just to finish like, you know, and over point of friction is often okay, so number one is like how do we get access?
+I think that's the way to go. That's how we do it now. And number two is how do we deploy.
+Chukwuebuka Anyaegbuna | 16:43
+Yeah. Yeah.
+Francois | 16:45
+And I think like, you know, a e easy way to pilot deployment is via secure e mail.
+Chukwuebuka Anyaegbuna | 16:45
+Yeah. Yes.
+Francois | 16:52
+And we have every email that we need to just send your emails. I haven't done it myself here, but I think it's completely doable to just set up an email server, just relying on existing categories, and you would just send it for you or send for an account, and you would just schedule the jobs at other ones every day and just check stuff in.
+That's how I would do it.
+Chukwuebuka Anyaegbuna | 17:14
+Yeah, that makes a ton of sense.
+Francois | 17:14
+And so it would be separate from. From what I've done before, it would be a completely separate project. But on the other hand, we would build on the experience that we've gained in the last six months or so. Does this make Or.
+Chukwuebuka Anyaegbuna | 17:30
+That's amazing. I think that would be so peaceful. I remember seeing Richie's demo of basically building chat HR, but it was just calling five API calls and just doing five API calls, which IHR doesn't do.
+So, yeah, I think... I guess the thing I was thinking of is when we're thinking about evaluating it, is that the EVA the end goal would be to get to a specific prompt that we think best, most accurately gives us the results that we want. Is that what we're thinking of here?
+Francois | 18:12
+I mean, that's a question of what's the best design for the system to generate the tool. I don't know. I think it very much depends on the nature of the input.
+Chukwuebuka Anyaegbuna | 18:19
+Yeah.
+Francois | 18:21
+So it depends on the nature of the question.
+Chukwuebuka Anyaegbuna | 18:21
+Yeah.
+Francois | 18:23
+Like, you know, in the best case scenario, if we wanted to be perfectly accurate.
+Chukwuebuka Anyaegbuna | 18:28
+Eight.
+Francois | 18:29
+And had doctors with infinite amount of time available to just complete this task.
+How would they go about trying to tackle this task? What kind of data do they need as input? If it's a reasonable amount of data, maybe that fits within the context of a front-end model.
+Maybe we can get away with just a single call to the LM.
+Chukwuebuka Anyaegbuna | 18:53
+Yeah.
+Francois | 18:54
+If it's data spread out all over the chart. Then maybe, you know, a single call is not gonna cut it. Like maybe we need to make like a specific sequence of calls to LL M, you know, maybe one call for the structural data, one call for the, you know, the radiology reports, one call for the clinical notes or, you know.
+So and at the end of the day, it's all very empirical. We you have we know we set up our eval like early in on like for just a small sample, maybe just ten patients.
+Chukwuebuka Anyaegbuna | 19:25
+Yeah.
+Francois | 19:27
+We try the most simple solution. We can do a TE implementation, maybe just a single call to LLM if it works well and we can get away with it.
+That's perfect. We don't have to complexify. If it's not enough, then we'll have to come up with a more complex solution to improve the performance. But I think that comes only later. Yeah.
+Chukwuebuka Anyaegbuna | 19:50
+So I guess the ultimate end goal is that we reduce the volume of CDI called documentation integrity queries from Michelle McCormack's team.
+They're sending 2,000 to 4,000 queries a month, and clinicians, I think, are a little bit sick of it, but ultimately the hospital system loves it because they're going to get annualized this year, $48 million in revenue
+from the CDI queries that are coming.
+Francois | 20:16
+From the quarries and just quick question on that.
+Chukwuebuka Anyaegbuna | 20:18
+Yeah, it's crazy, right? Yeah, I think the query... Smarter DX refused the discharge note, and I think the query, the potential queries are surfaced up to the CDI team manually, and then they send either in-basket notifications.
+Francois | 20:22
+So the queries are sent, they're sent by human. So they're sent by, you know, automatically by whatever machines in the background.
+Chukwuebuka Anyaegbuna | 20:46
+I think it's in-basket notification. IP in the basket messages to the clinicians to confirm whether they will add this diagnosis or not.
+Francois | 20:56
+Yeah, and clinicians say that because it's very disruptive for the workflow and.
+Chukwuebuka Anyaegbuna | 21:00
+Yeah, and it's three weeks ago.
+Francois | 21:01
+And so they would like to automate this away with.
+Chukwuebuka Anyaegbuna | 21:03
+Yeah.
+Francois | 21:04
+S but I think that the system we're talking about wouldn't automate everything away. We just like to send emails with just like field building codes.
+Then it wouldn't be integrated. Rightly, we still have to copy and paste PAS to check that it's actually accurate because, when they validate it, then it's their responsibility. I don't know the legal consequences for just providing a diagnosis or building code that's not accurate, but there is a human element of who's responsible.
+Do we still want to keep the human in the loop or not? So those are like.
+Chukwuebuka Anyaegbuna | 21:40
+And, yeah, I think that those are big questions, but ultimately, I think the simplest version of it is just to take a bunch of text and get one ALM call, see what it can extract.
+Francois | 21:40
+That's from cash questions.
+Chukwuebuka Anyaegbuna | 21:55
+Like. one shot or whatever, that kind of... And then have a human confirm those building codes before and then adding it to the patient's record, which is obviously painful. The gold standard version of it is that we not only call, we not only ingest the trust on your progress,
+and we call for the labs. We have a series of M calls that gets to this final destination, which is these are the codes, and in the future state, these are the billing, these are the diagnoses, and in the future state, that might be automated, but there's not enough. We don't think it's good enough to do that, but at least in the short term, these other diagnosis codes and click to add them to the medical record or to delete them...
+Yeah, I think so. Actually, the only difference between those two use cases is... I actually think if we want a much more accurate e-file, if we want to do really well on the e-files, I think we want to be able to look at the labs versus just looking at what's in the progress
+labs.
+Francois | 22:56
+And look at what's in the progress mode... Can you repeat the last piece you need to... Yeah, we need the lab to switch your data.
+Chukwuebuka Anyaegbuna | 22:59
+The lab, the labs. Yeah, lab yeah, structures of y yeah.
+Francois | 23:05
+Yeah, but so we... I think we can retrieve that on the fly via Firestore.
+It's just a little more work than SQL queries, but the upside is that we have access to it live, there's no delay. It's just like everything that shows up in Epic's API space, we have access to it.
+Chukwuebuka Anyaegbuna | 23:26
+That's amazing.
+Francois | 23:27
+And it's not lagging behind by 48 hours or something?
+Chukwuebuka Anyaegbuna | 23:31
+Yeah, that's cool. Okay, so I like the idea that it's a new project, a separate project, and we can be independent with it. How do you think about that framing? Should I take it to John with the idea that we've got to a place where we have a fairly okay prototype,
+but actually, to do it properly, here's what we think it will take. You say Firestore, NPS, et cetera. How do you think it's best to get it to the next level?
+Francois | 23:57
+Five think it's great that you made some good progress, you understood the problem, and you even have a prototype.
+Chukwuebuka Anyaegbuna | 23:59
+Because I feel you're a bit stuck.
+Francois | 24:07
+I think that's cool, that demonstrates your motivation. But then the question is, okay, how do we move on to the next operational steps?
+Chukwuebuka Anyaegbuna | 24:15
+Yeah.
+Francois | 24:15
+And, yeah. So the way I like to think about it is it's a separate project, but we build on top of what we've learned.
+Chukwuebuka Anyaegbuna | 24:25
+Yeah.
+Francois | 24:26
+And that will help us move faster in practice. I think we need to set up a team and see who's responsible for what.
+So you're leading this project and that's cool. I think you may need support from... I think you already have the connections on the clinical side, you talk to doctors who will explain to you extremely well how to understand the poem.
+So next we need... I think we need people who can help us build the code base to just extract those relevant information. Maybe it's the same person or maybe it's someone else who just deals with the pipeline and someone like the generation pipeline.
+Chukwuebuka Anyaegbuna | 25:10
+Yeah.
+Francois | 25:10
+And early on, I think we want someone. Maybe it's the same person who just sets up the evaluation framework.
+Chukwuebuka Anyaegbuna | 25:14
+Yeah.
+Francois | 25:18
+Like are the go-to labels? Forward patients. And then how do we automatically evaluate and generate any generation pipeline?
+I think we have the resources for this, so that's cool. And keeping in mind that down the line, what we want, I think, is to pilot this tool and deploy it. We wouldn't be constrained to, for example, just Sequoia.
+So in my project previously, I was very much constrained by what the TDS data science team wanted, and they didn't want me to deploy beyond SA Hospital.
+Chukwuebuka Anyaegbuna | 25:55
+Why, it sounds like you were so constrained.
+Francois | 25:59
+And now I think it's well, I think they have the they have very good reasons.
+Chukwuebuka Anyaegbuna | 26:01
+My God.
+Francois | 26:07
+It's just like if it fails, you would look bad on them.
+Chukwuebuka Anyaegbuna | 26:07
+Yes.
+Francois | 26:10
+It's like the same constraint that, you know, big organization have. It's like, if you're YouTube and you're testing on new features, you don't want to deploy it everywhere or else, you don't know, even if it's just a small feature change, it would look very bad if it goes wrong, right?
+It would reflect very badly on you.
+Chukwuebuka Anyaegbuna | 26:28
+[Laughter] Yeah.
+Francois | 26:29
+Is like for those kinds of silly reasons.
+But it totally makes sense from their perspective. I mean, it's frustrating for my end, but I very much understand where they're coming from. So if we can just bypass those constraints, I think we would just have a chance to move much faster.
+So one question is: how and where would we deploy? I think we'll still need authorization. I don't think we can just deploy stuff like this without asking. I think we have the permission at this point to retrieve all the data that we want and play with it.
+But then when we actually want to deploy something and just deliver, Yeah.
+Chukwuebuka Anyaegbuna | 27:14
+And I think we'll have air cover.
+Francois | 27:14
+Then like the we'll need permission.
+Chukwuebuka Anyaegbuna | 27:17
+Yeah, I think we'll have air cover from John at least on that. Because I...
+Yeah, I think I wouldn't progress it without his sign-off. If he thinks it's a good idea.
+Francois | 27:26
+Yeah, but I think it's a complicated process.
+Chukwuebuka Anyaegbuna | 27:28
+He's been on all the same meetings. So, he's been privy to all the same tradeoffs and questions that different teams have had.
+Francois | 27:36
+Like needs to ask other people here. TEDs, and it's extremely complicated, but I think it's going to be easier to set it up this way, without a complex collaboration with TEDs that me take... Then there's the goal for the project.
+Chukwuebuka Anyaegbuna | 27:44
+Yeah, yes.
+Francois | 27:53
+Like, is it, you know, to write down a paper about it? Or is it like to actually develop a product that's going to be used here at Central Health? Because if the goal is to actually put out a paper, like a product that's going to be used, then we need to already have in mind...
+Okay, so if everything goes well, what do we do next? Right? Because if we... I think if everything goes well, we pilot the tool, we got the permission, we deployed technicians... Yes. I don't know exactly what would come next. We need to at least have the beginning of a concept of a plan for what we would do.
+Right, like.
+Chukwuebuka Anyaegbuna | 28:33
+Yeah, great. Yeah, it feels hard. It feels like you built something amazing with the discharge and with the media brief. And now it's almost mired in politics and a little bit of deciding what happens next, and it's really hard.
+Francois | 28:47
+One.
+Chukwuebuka Anyaegbuna | 28:50
+But yeah, I guess... Has it been overall cognizant of time, but has it been an overall good experience with the building or.
+Francois | 28:57
+Yeah, okay, it's been super valuable.
+Chukwuebuka Anyaegbuna | 28:57
+Yeah, it's been good to me, and that's good.
+Francois | 29:02
+I've learned a lot, but made mistakes. And I think, you know, it would be. I'm trying to be helpful and just like. So that people who come after me don't make the same mistakes I did. [Laughter].
+Chukwuebuka Anyaegbuna | 29:13
+Yeah, I love that. No, I appreciate it. I appreciate it. Bending TDS. I think this is the main thing. And yeah, cool. Okay, so what I'll do is I'll get the set up. Ritchie certainly the stuff of... I think you've just linked it as well, which is how to get set up on fire and stuff like that if you need to email someone for data access or something.
+Francois | 29:33
+So are you collaborating with Ritchie on the technical side?
+Chukwuebuka Anyaegbuna | 29:33
+And So yeah. No one. No, I just five-coded that, but I was struggling with something at some point, and I was wondering how hard it would be to get fire access. Ritchie just pointed me to the documents that I think you've written.
+Francois | 29:47
+Yes.
+Chukwuebuka Anyaegbuna | 29:48
+And. Yeah, so she. But she's not helping me at all. No, it's such.
+Francois | 29:51
+Okay.
+Chukwuebuka Anyaegbuna | 29:51
+It's. Yeah, I can't.
+Francois | 29:53
+Cause like, I think. So one thing on the I mean side note on, so on the prototype that you recoded. So if you input like VSI into cloude like in vs code like I mean, don't tell anyone because you're not supposed to do that because like then you're sending PHI into code like into the.
+So q like vs code itself like it doesn't use secure G pt use like you know, regular version of like cloud GPT and so it's basically as you sending Pi to those APIs that are not secure.
+Chukwuebuka Anyaegbuna | 30:21
+Zero.
+Francois | 30:26
+So. I mean, it's completely fine.
+But don't show this to Jonet and or Mike ffer then one.
+Chukwuebuka Anyaegbuna | 30:30
+[Laughter] Okay. [Laughter] That's good, that's helpful. Thank you. Because I used secure GPT for a ton of stuff, it's hasn't got the latest models on, and stuff like that, it's not great.
+Okay, that's really helpful find. Yeah. Very cool. Yeah, that's the thing, I think.
+Francois | 30:50
+And so yeah, I think we'll need like, if it's just more than I think that this is a big project. So if you can get like a couple of hands like that may be helpful. Maybe in the beginning you want to keep the team small to be to not be too distracted. I'm happy to help out and chat with you and, you know, share some of my experience.
+Maybe if you need like help coding a couple of things, I can help you out. But I think at some point, you'll need some technical person who actually does the hard work of coding, cleaning, and putting out code that's ready for production.
+Then, you can coordinate all the different pieces through the code, and then you'll learn a lot too along the way. That's fine, so it's soited.
+Chukwuebuka Anyaegbuna | 31:31
+Yeah, I just want to get a little bit more technical. There's a really good way to learn that. So, yeah, I'll ask Jonathan what he thinks is the best kind of partitioning of the teams we know we can go from there.
+Francois | 31:42
+Yeah. So I'm chatting with Jonathan tomorrow morning. Is there anything you would like me to ask or.
+Chukwuebuka Anyaegbuna | 31:48
+Yeah. I haven't been able to get time with him this week. I just said that we spoke, and I'm looking to understand how best to resource the next steps. That's it. I'll just tell him your view, which I think is... I came to as well that the better way of actually building this thing is through Fire APIs.
+Francois | 32:02
+Okay.
+Chukwuebuka Anyaegbuna | 32:11
+And means we can go faster and we can actually make something that's a bit better. I think those two things - understanding how to resource it and the better way to build it - will be good.
+Then I can capt.
+Francois | 32:23
+Yeah.
+Chukwuebuka Anyaegbuna | 32:24
+In the next week and a half as I do.
+Francois | 32:26
+What I do for my agent brief is for your API calls. But I started using the Google Cloud Platform database, but ultimately I had to move away from it.
+Chukwuebuka Anyaegbuna | 32:35
+Okay, yeah, okay, amazing.
+Francois | 32:37
+And a PS: I never do everything from scratch. So, whether or not it's us teaming up with the TEDS data science team to make it a subsection, an add-on to the agent management brief pilot, or if we do it separately on the side with ACU access, in any case, it's Fire API calls.
+Chukwuebuka Anyaegbuna | 33:00
+Okay, that's so helpful tonight. Let's know. So, thank you so much for... Yeah, to have you back.
+Francois | 33:04
+SE okay, great. Happy to catch up in any time. Chuck, it's a pleasure to talk to you.
+Chukwuebuka Anyaegbuna | 33:10
+Talk to you soon.
+Francois | 33:10
+Yeah, thank you, thank.
+Chukwuebuka Anyaegbuna | 33:11
+[Laughter] Bye.
