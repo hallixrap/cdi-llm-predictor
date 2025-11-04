@@ -32,9 +32,10 @@ tds_ds_env_vars.sh
 # Data files (may contain PHI)
 data/raw/*.csv
 data/processed/*.csv
-results/*.csv
-results/*.json
 642_CDI_queries*.csv
+
+# Results (evaluation outputs - include in repo for reference)
+# results/*.csv and results/*.json are now ALLOWED
 
 # Jupyter Notebooks checkpoints
 .ipynb_checkpoints/
@@ -58,3 +59,6 @@ results/*.json
 tmp/
 temp/
 *.tmp
+
+# Archived old files (not needed in repo)
+_ARCHIVE_OLD_FILES/

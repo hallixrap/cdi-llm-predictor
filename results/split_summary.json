@@ -1,0 +1,11 @@
+{
+  "total_examples": 539,
+  "train_size": 431,
+  "val_size": 54,
+  "test_size": 54,
+  "train_pct": 79.96289424860854,
+  "val_pct": 10.018552875695732,
+  "test_pct": 10.018552875695732,
+  "stratification_column": "diagnosis_categories",
+  "random_state": 42
+}
