@@ -60,10 +60,6 @@ The web demo:
 
 ## Current Performance
 
-Based on 72-case validation:
-- **31% overall recall** (22/71 matches)
-- **39% adjusted recall** (excluding expected misses)
-
 **Strengths**:
 - ✅ Malnutrition (via hypoalbuminemia)
 - ✅ Pressure ulcers
@@ -104,15 +100,3 @@ Connects to:
 
 Press `Ctrl+C` in the terminal where the server is running
 
-## Future Enhancements
-
-Potential improvements:
-1. Add structured lab data integration (→ 55-65% recall)
-2. Expand prompt for more specific conditions
-3. Add user feedback mechanism
-4. Save/export CDI queries
-5. Batch processing for multiple discharge summaries
-
-## Contact
-
-For API key issues, contact Fateme Nateghi at Stanford Healthcare IT.
