@@ -59,16 +59,13 @@ def predict_missed_diagnoses(discharge_summary: str, api_key: str, model: str = 
     """
     Predict diagnoses that CDI specialists would query about.
 
-    This is based on analysis of 539 actual CDI queries showing what physicians
-    commonly miss or fail to document adequately.
+    Identifies clinically supported diagnoses that are missing or unclear
+    in physician documentation.
     """
 
-    # Build prompt based on ACTUAL Stanford CDI query data + .rccautoprognote automation criteria
-    prompt = f"""You are a Clinical Documentation Integrity (CDI) specialist at Stanford Healthcare reviewing a discharge summary using Stanford's .rccautoprognote automation criteria.
+    prompt = f"""You are a Clinical Documentation Integrity (CDI) specialist at Stanford Healthcare reviewing a discharge summary.
 
 YOUR ROLE: Identify diagnoses that are clinically supported by evidence in the note but are MISSING or UNCLEAR in the physician's documentation. Use the SPECIFIC CLINICAL CRITERIA below - but remember discharge notes are messy, so use clinical judgment alongside the rules.
-
-CONTEXT: Based on 4,527+ real CDI queries at Stanford (Sep 2024-May 2025) + Stanford's automated diagnosis criteria (.rccautoprognote).
 
 **BILLING CODE OPTIMIZATION (IMPORTANT):**
 CDI specialists look for the MOST SPECIFIC diagnosis that is clinically supported to maximize reimbursement accuracy:
@@ -88,9 +85,9 @@ Always include when documentable:
 - ETIOLOGY when clear (e.g., "due to chemotherapy", "due to sepsis", "secondary to CKD")
 - SEVERITY qualifiers (severe, acute, chronic)
 
-**TOP 10 MOST COMMON QUERIES (by volume with SPECIFIC CRITERIA):**
+**TOP 10 MOST COMMON QUERIES:**
 
-1. **ELECTROLYTE ABNORMALITIES** (4,527 queries - #1 PRIORITY!)
+1. **ELECTROLYTE ABNORMALITIES** (#1 PRIORITY)
 
    a) **HYPOVOLEMIC HYPONATREMIA**:
       - Criteria: Sodium <130 mEq/L (normal 135-145) + IV 0.9% NS treatment
@@ -130,7 +127,7 @@ Always include when documentable:
       - Criteria: Phosphorus >4.5 mg/dL + Phosphate binders (Calcium acetate, Sevelamer, etc.) OR two labs >4.5
       - Statement: "Hyperphosphatemia evidenced by [Phos value], requiring ongoing monitoring and treatment"
 
-2. **ANEMIA** (2,528 queries)
+2. **ANEMIA**
 
    a) **ACUTE BLOOD LOSS ANEMIA (in operative patients)**:
       - Criteria: 2-point Hgb drop from baseline + Hgb <13 (M) or <12 (F) + >250ml EBL during surgery + Hgb checked >2x/day
@@ -145,7 +142,7 @@ Always include when documentable:
       - Criteria: Chronic Hgb <13 (M) or <12 (F) with chronic disease (cancer, CKD, inflammatory conditions)
       - Pattern: Low Hgb noted but not coded as anemia type
 
-3. **MALNUTRITION** (1,587 queries)
+3. **MALNUTRITION**
    - Criteria: BMI ≤18.5 OR documented weight loss OR Albumin <3.0-3.5 OR temporal wasting/muscle loss
    - **Underweight**: BMI ≤18.5 kg/m²
    - **Severe protein-calorie malnutrition**: BMI <18.5 + Albumin <3.0 + weight loss
@@ -153,31 +150,31 @@ Always include when documentable:
    - Statement: "Diagnosis [malnutrition type], BMI [value], increasing health risks, requiring additional time, resources, and/or education"
    - Look for: BMI, albumin, weight loss, nutritional support, dietician involvement
 
-4. **HYPOALBUMINEMIA** (1,236 queries)
+4. **HYPOALBUMINEMIA**
    - Criteria: Albumin <3.2 g/dL on at least TWO panels
    - Normal: 3.5-5.0 g/dL
    - Statement: "Hypoalbuminemia evidenced by minimum Albumin of [value] g/dL, requiring ongoing monitoring and/or treatment"
    - Pattern: Lab value present, diagnosis absent (often separate from malnutrition query)
 
-5. **SEPSIS** (#5 Priority - 1,199 queries):
+5. **SEPSIS**:
    - Criteria: SIRS (2+ of: Temp >38°C/<36°C, HR >90, RR >20, WBC >12k/<4k) + suspected/documented infection
    - Often clinically evident but not explicitly stated as "sepsis"
    - If organ dysfunction/hypotension → Severe sepsis
    - If vasopressors → Septic shock
    - Look for: Infection signs, SIRS criteria, antibiotics, blood cultures, organ dysfunction
 
-6. **PATHOLOGY RESULTS** (#6 Priority - 937 queries):
+6. **PATHOLOGY RESULTS**:
    - Criteria: Biopsy/surgical pathology findings not incorporated into discharge diagnoses
    - Pattern: Path report shows specific diagnosis but not in discharge dx list
    - Example: "Path shows adenocarcinoma" but discharge only says "mass"
    - Look for: Pathology report mentions, biopsy results in note
 
-7. **RESPIRATORY FAILURE** (#7 Priority - 914 queries):
+7. **RESPIRATORY FAILURE**:
    - Criteria: Oxygen requirement + (PaO2 <60 mmHg OR O2 sat <90% OR PaCO2 >45 mmHg)
    - Pattern: "Respiratory distress" documented but not "acute respiratory failure"
    - Look for: Oxygen requirement, mechanical ventilation, hypoxia, hypercapnia
 
-7b. **PULMONARY EDEMA** (Gap Analysis - 9 queries):
+7b. **PULMONARY EDEMA**:
     - **CARDIOGENIC** (due to heart failure): Fluid overload from cardiac dysfunction
       * Criteria: Pulmonary edema + heart failure + increased JVP/edema + BNP elevated
       * Statement: "Acute Pulmonary Edema, Cardiogenic, due to Heart Failure"
@@ -188,13 +185,13 @@ Always include when documentable:
     - Pattern: "Pulmonary edema" or "flash pulmonary edema" mentioned but etiology not specified
     - Look for: Chest X-ray findings, oxygen requirement, lasix use, heart failure vs other causes
 
-8. **PRESSURE ULCER** (#8 Priority - 823 queries):
+8. **PRESSURE ULCER**:
    - Criteria: Must specify Stage (1-4, unstageable, deep tissue injury) + Location + POA status
    - POA (Present on Admission) status CRITICAL for reimbursement
    - Pattern: Nursing notes it but physician doesn't code it
    - Look for: Wound descriptions, staging, location (sacral, heel, ischial)
 
-9. **COAGULATION DISORDERS** (#9 Priority - 809 queries):
+9. **COAGULATION DISORDERS**:
 
    a) **THROMBOCYTOPENIA**:
       - Criteria: Platelets <145 K/uL on at least TWO panels
@@ -209,7 +206,7 @@ Always include when documentable:
       - Criteria: Above + Chemotherapy administered
       - Statement: "Pancytopenia due to Chemotherapy evidenced by all three blood cell lines below normal, requiring ongoing monitoring and/or treatment"
 
-10. **HEART FAILURE** (#10 Priority - 789 queries):
+10. **HEART FAILURE**:
     - Criteria: Must specify Acute/Chronic/Acute on chronic + Systolic (EF <40%) vs Diastolic (EF ≥50%)
     - I50.23 (acute on chronic systolic) is high-value but often missing specificity
     - **Common CDI Query: "Diastolic CHF, Acute-on-Chronic"** - specify acuity when worsening
@@ -217,7 +214,7 @@ Always include when documentable:
     - Look for: EF values, BNP, edema, dyspnea, heart failure treatment, acute decompensation
     - Statement: "Acute on Chronic Diastolic Heart Failure, evidenced by [EF value], [symptoms], requiring treatment"
 
-10b. **TYPE 2 MYOCARDIAL INFARCTION / DEMAND ISCHEMIA** (Gap Analysis - 9 queries):
+10b. **TYPE 2 MYOCARDIAL INFARCTION / DEMAND ISCHEMIA**:
      - **NSTEMI-Type 2** (Demand Ischemia): MI from supply-demand mismatch, NOT plaque rupture
      - Criteria: Troponin elevation + ischemic cause (sepsis, hypotension, tachycardia, anemia) WITHOUT acute coronary syndrome
      - **HIGH VALUE**: Type 2 MI (I21.A1) is more specific than "demand ischemia" or "troponin elevation"
@@ -228,7 +225,7 @@ Always include when documentable:
 
 **ADDITIONAL HIGH-VALUE DIAGNOSES (from .rccautoprognote):**
 
-11. **ACUTE KIDNEY INJURY/FAILURE** (500+ queries, Oct 2024):
+11. **ACUTE KIDNEY INJURY/FAILURE**:
     - Criteria: Creatinine change >0.3 mg/dL with abnormal Cr (M: 0.67-1.17, F: 0.51-0.95)
     - Exclude: CKD or Chronic Renal Disease in active problem list/PMH
     - Pattern: Cr elevation noted but "AKI" not documented
@@ -263,14 +260,14 @@ Always include when documentable:
     - Statement: "Immunocompromised State due to chemotherapy/Radiotherapy for Malignancy OR Immunosuppressant for Transplant, requiring ongoing monitoring and treatment"
     - Look for: Active chemo, immunosuppressant medications, transplant history
 
-18. **ENCEPHALOPATHY** (710+ queries):
+18. **ENCEPHALOPATHY**:
     - **Delirium due to known physiological condition**
     - **Metabolic encephalopathy** (metabolic, toxic, hepatic, septic)
     - Criteria: Altered mental status + metabolic cause
     - Pattern: AMS noted but not formally diagnosed as encephalopathy
     - Look for: Confusion, altered mental status, metabolic derangements
 
-19. **TYPE 2 MI (NSTEMI)** (743+ queries):
+19. **TYPE 2 MI (NSTEMI)**:
     - Criteria: Elevated troponin + supply/demand mismatch (anemia, hemorrhage, sepsis, shock, tachycardia)
     - Pattern: Troponin noted but not diagnosed as MI
     - Look for: Troponin elevation + clear precipitating cause
