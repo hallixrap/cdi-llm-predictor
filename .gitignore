@@ -89,3 +89,14 @@ DEID_WORKFLOW.md
 EVALUATION_PLAN.md
 PROJECT_PLAN.md
 QUICK_START.md
+
+# Local utility scripts (not core)
+run_evaluation.py
+scripts/analyze_results.py
+scripts/analyze_cdi_gap_analysis.py
+scripts/compare_models.py
+scripts/deidentify_notes.py
+scripts/evaluate_rcc_accuracy.py
+scripts/fix_rcc_sections.py
+scripts/parse_cdi_queries.py
+scripts/retry_failed_cases.py
