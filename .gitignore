@@ -60,3 +60,32 @@ temp/
 
 # Archived old files (not needed in repo)
 _ARCHIVE_OLD_FILES/
+
+# Meeting transcripts and notes (not code)
+*_transcript*.txt
+block_transcript.txt
+
+# Word documents
+*.docx
+
+# Context folder (may contain sensitive data)
+Context/
+
+# SQL queries folder (contains PHI data)
+SQL queries/
+
+# Paper drafts
+paper/
+
+# Docs folder (local documentation)
+docs/
+
+# Debug/test scripts (temporary)
+scripts/test_gpt5_*.py
+scripts/debug_gpt5.py
+
+# Markdown planning docs (keep local)
+DEID_WORKFLOW.md
+EVALUATION_PLAN.md
+PROJECT_PLAN.md
+QUICK_START.md

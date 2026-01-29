@@ -20,23 +20,51 @@ def call_stanford_llm(prompt: str, api_key: str, model: str = "gpt-4.1") -> str:
         'Content-Type': 'application/json'
     }
 
-    # Model endpoints
+    # Model endpoints - Stanford SecureGPT API
     model_urls = {
+        "gpt-5": "https://apim.stanfordhealthcare.org/openai-eastus2/deployments/gpt-5/chat/completions?api-version=2024-12-01-preview",
         "gpt-4.1": "https://apim.stanfordhealthcare.org/openai-eastus2/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
         "gpt-5-nano": "https://apim.stanfordhealthcare.org/openai-eastus2/deployments/gpt-5-nano/chat/completions?api-version=2024-12-01-preview",
-        "gpt-4.1-mini": "https://apim.stanfordhealthcare.org/openai-eastus2/deployments/gpt-4.1-mini/chat/completions?api-version=2025-01-01-preview"
+        "gpt-4.1-mini": "https://apim.stanfordhealthcare.org/openai-eastus2/deployments/gpt-4.1-mini/chat/completions?api-version=2025-01-01-preview",
+        # Claude models via Stanford Anthropic endpoint
+        "claude-opus-4": "https://apim.stanfordhealthcare.org/anthropic/v1/messages",
+        "claude-sonnet-4": "https://apim.stanfordhealthcare.org/anthropic/v1/messages",
     }
 
     url = model_urls.get(model, model_urls["gpt-4.1"])
+    is_claude = model.startswith("claude")
 
-    payload = json.dumps({
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.1,  # Low temperature for consistency
-        "max_tokens": 4000  # Increase to avoid truncation of JSON responses
-    })
+    # Claude uses different request/response format
+    if is_claude:
+        claude_model_map = {
+            "claude-opus-4": "claude-opus-4-20250514",
+            "claude-sonnet-4": "claude-sonnet-4-20250514",
+        }
+        payload = json.dumps({
+            "model": claude_model_map.get(model, model),
+            "max_tokens": 4000,
+            "messages": [{"role": "user", "content": prompt}]
+        })
+    else:
+        # OpenAI format - GPT-5 models have different API requirements
+        is_gpt5 = model.startswith("gpt-5")
+        request_body = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        # GPT-5 doesn't support custom temperature, only uses max_completion_tokens
+        # IMPORTANT: GPT-5 uses reasoning tokens BEFORE output tokens. With complex prompts,
+        # it may use 4000+ reasoning tokens, leaving nothing for actual output.
+        # We need to set max_completion_tokens high enough to cover reasoning + output.
+        if is_gpt5:
+            request_body["max_completion_tokens"] = 16000  # Allow ~12k reasoning + 4k output
+            # GPT-5 only supports temperature=1 (default), so don't set it
+        else:
+            request_body["temperature"] = 0.1  # Low temperature for consistency
+            request_body["max_tokens"] = 4000
+        payload = json.dumps(request_body)
 
-    response = requests.post(url, headers=headers, data=payload, timeout=60)
+    response = requests.post(url, headers=headers, data=payload, timeout=120)
 
     # Check for HTTP errors
     if response.status_code != 200:
@@ -48,11 +76,32 @@ def call_stanford_llm(prompt: str, api_key: str, model: str = "gpt-4.1") -> str:
             error_msg += "\n3. API key format is incorrect"
         raise Exception(error_msg)
 
-    # Parse response
+    # Parse response - Claude vs OpenAI have different formats
     try:
-        return json.loads(response.text)['choices'][0]['message']['content']
-    except (KeyError, json.JSONDecodeError):
-        raise Exception(f"Unexpected API response format: {response.text[:500]}")
+        resp_json = json.loads(response.text)
+        if is_claude:
+            return resp_json['content'][0]['text']
+        else:
+            content = resp_json['choices'][0]['message']['content']
+            # Debug: Check for empty content with GPT-5
+            if content is None or content == "":
+                # Log the full response structure for debugging
+                import os
+                debug_log = os.environ.get('CDI_DEBUG_LOG')
+                if debug_log:
+                    with open(debug_log, 'a') as f:
+                        f.write(f"\n{'='*80}\n")
+                        f.write(f"EMPTY CONTENT DETECTED for model: {model}\n")
+                        f.write(f"Full API response:\n{json.dumps(resp_json, indent=2)[:3000]}\n")
+                # Check for finish_reason
+                finish_reason = resp_json['choices'][0].get('finish_reason', 'unknown')
+                if finish_reason == 'length':
+                    raise Exception(f"GPT-5 response truncated (finish_reason=length). Try shorter prompt.")
+                elif finish_reason == 'content_filter':
+                    raise Exception(f"GPT-5 content filtered. Response blocked by safety filter.")
+            return content if content else ""
+    except (KeyError, json.JSONDecodeError) as e:
+        raise Exception(f"Unexpected API response format: {response.text[:500]}. Error: {e}")
 
 
 def predict_missed_diagnoses(discharge_summary: str, api_key: str, model: str = "gpt-4.1") -> Dict:
@@ -156,18 +205,80 @@ Always include when documentable:
    - Statement: "Hypoalbuminemia evidenced by minimum Albumin of [value] g/dL, requiring ongoing monitoring and/or treatment"
    - Pattern: Lab value present, diagnosis absent (often separate from malnutrition query)
 
-5. **SEPSIS**:
-   - Criteria: SIRS (2+ of: Temp >38°C/<36°C, HR >90, RR >20, WBC >12k/<4k) + suspected/documented infection
-   - Often clinically evident but not explicitly stated as "sepsis"
-   - If organ dysfunction/hypotension → Severe sepsis
-   - If vasopressors → Septic shock
-   - Look for: Infection signs, SIRS criteria, antibiotics, blood cultures, organ dysfunction
+5. **SEPSIS** (HIGH PRIORITY - Often Missed!)
+   **CRITICAL**: CDI specialists query for sepsis based on CLINICAL PATTERN RECOGNITION, not just SIRS criteria.
 
-6. **PATHOLOGY RESULTS**:
-   - Criteria: Biopsy/surgical pathology findings not incorporated into discharge diagnoses
-   - Pattern: Path report shows specific diagnosis but not in discharge dx list
-   - Example: "Path shows adenocarcinoma" but discharge only says "mass"
-   - Look for: Pathology report mentions, biopsy results in note
+   **Classic Criteria (SIRS + Infection):**
+   - SIRS: 2+ of: Temp >38°C/<36°C, HR >90, RR >20, WBC >12k/<4k
+   - PLUS suspected or documented infection
+
+   **TREATMENT PATTERNS THAT STRONGLY SUGGEST SEPSIS (even if not explicitly stated):**
+   - Blood cultures ordered AND broad-spectrum IV antibiotics started
+   - "Sepsis protocol" initiated or mentioned
+   - Lactate ordered (especially if elevated >2 mmol/L)
+   - Aggressive IV fluid resuscitation (>30 mL/kg or "fluid bolus")
+   - Antibiotics started urgently for suspected infection
+   - Patient transferred to ICU for "infection" or "pneumonia" management
+
+   **COMMON PATTERNS WHERE SEPSIS SHOULD BE QUERIED:**
+   - UTI + altered mental status + tachycardia → Query Sepsis (urosepsis)
+   - Pneumonia + hypoxia + IV antibiotics → Query Sepsis
+   - Cellulitis/wound infection + systemic symptoms → Query Sepsis
+   - Post-operative fever + infection signs + antibiotics → Query Sepsis
+   - Any infection + organ dysfunction (AKI, confusion, hypotension) → Query Sepsis
+
+   **SEVERITY ESCALATION:**
+   - Sepsis + organ dysfunction or hypotension → Severe sepsis
+   - Sepsis + vasopressors required → Septic shock
+
+   **SEPSIS MUST BE QUERIED WHEN:**
+   - Any documented infection with systemic response
+   - Terms like "possible sepsis", "rule out sepsis", "sepsis workup"
+   - Blood cultures + broad-spectrum antibiotics + fluid resuscitation
+   - ICU admission for infection management
+
+   **Statement Template:**
+   "Sepsis evidenced by [infection source] with systemic response including [specific findings: tachycardia, fever, elevated WBC, etc.], treated with [antibiotics/fluids]. Consider severity: [sepsis vs severe sepsis vs septic shock]"
+
+6. **PATHOLOGY RESULTS** (HIGH PRIORITY - Often in "Other" Category!)
+   **CRITICAL**: CDI specialists query when pathology findings are NOT in discharge diagnoses.
+
+   **Types of Pathology Queries:**
+   - Malignant findings: "Adenocarcinoma confirmed" → must be in discharge dx
+   - Metastatic disease: "Metastases to [organ]" → specific location matters
+   - Specific tumor types: "High-grade neuroendocrine carcinoma" → exact pathology terminology
+   - Pleural effusions: "Malignant pleural effusion" vs "pleural effusion"
+
+   **Pattern Recognition:**
+   - "Pathology shows..." or "Path report demonstrates..." → Query if not in dx list
+   - "Cytology positive for..." → Query the specific finding
+   - "Biopsy confirmed..." → Query if diagnosis not explicit
+   - Surgical pathology mentions → Ensure captured in discharge diagnoses
+
+   **Common Missed Pathology Queries:**
+   - "Malignant pleural effusion, confirmed, as noted in cytology report"
+   - "Adenocarcinoma with lymph node metastases, confirmed, as noted in pathology"
+   - "High-grade [tumor type], perineural invasion, confirmed in pathology"
+
+   **Statement Template:**
+   "[Pathology finding], confirmed, as noted in [pathology/cytology/biopsy] report dated [date if available]"
+
+6b. **DEBRIDEMENT SPECIFICITY** (Commonly Queried!)
+    **CRITICAL**: CDI queries for SPECIFIC debridement depth/type.
+
+    **Types (in order of reimbursement value):**
+    - Excisional debridement to bone (highest value)
+    - Excisional debridement to muscle
+    - Excisional debridement to subcutaneous tissue
+    - Non-excisional debridement
+
+    **Pattern Recognition:**
+    - "Debridement performed" without depth → Query for specificity
+    - Wound care notes mentioning sharp debridement → Query type
+    - Operative notes with debridement → Query depth (bone/muscle/subQ)
+
+    **Statement Template:**
+    "[Excisional/Non-excisional] Debridement to [bone/muscle/subcutaneous tissue], [location], [date]"
 
 7. **RESPIRATORY FAILURE**:
    - Criteria: Oxygen requirement + (PaO2 <60 mmHg OR O2 sat <90% OR PaCO2 >45 mmHg)
@@ -206,22 +317,53 @@ Always include when documentable:
       - Criteria: Above + Chemotherapy administered
       - Statement: "Pancytopenia due to Chemotherapy evidenced by all three blood cell lines below normal, requiring ongoing monitoring and/or treatment"
 
-10. **HEART FAILURE**:
-    - Criteria: Must specify Acute/Chronic/Acute on chronic + Systolic (EF <40%) vs Diastolic (EF ≥50%)
-    - I50.23 (acute on chronic systolic) is high-value but often missing specificity
-    - **Common CDI Query: "Diastolic CHF, Acute-on-Chronic"** - specify acuity when worsening
-    - Pattern: "CHF" documented but lacks specificity, or acuity not specified
-    - Look for: EF values, BNP, edema, dyspnea, heart failure treatment, acute decompensation
-    - Statement: "Acute on Chronic Diastolic Heart Failure, evidenced by [EF value], [symptoms], requiring treatment"
+10. **HEART FAILURE** (HIGH PRIORITY - Specificity Required!)
+    **CRITICAL**: CDI queries require SPECIFICITY on both ACUITY and TYPE:
 
-10b. **TYPE 2 MYOCARDIAL INFARCTION / DEMAND ISCHEMIA**:
-     - **NSTEMI-Type 2** (Demand Ischemia): MI from supply-demand mismatch, NOT plaque rupture
-     - Criteria: Troponin elevation + ischemic cause (sepsis, hypotension, tachycardia, anemia) WITHOUT acute coronary syndrome
-     - **HIGH VALUE**: Type 2 MI (I21.A1) is more specific than "demand ischemia" or "troponin elevation"
-     - Pattern: Troponin elevated with clear stressor but not called "Type 2 MI"
-     - Look for: Troponin rise + sepsis/shock/tachycardia/anemia + NO cardiac cath/PCI
-     - Statement: "Type 2 Non-ST Elevation Myocardial Infarction (NSTEMI) due to demand ischemia from [cause]"
-     - Common CDI query: "Demand Ischemia" or "Troponin elevation" → should be "Type 2 MI"
+    **Acuity (REQUIRED):**
+    - Acute: New onset heart failure
+    - Chronic: Stable, ongoing heart failure
+    - Acute on Chronic: Exacerbation/decompensation of chronic HF (MOST COMMON)
+
+    **Type (REQUIRED):**
+    - Systolic (HFrEF): EF <40%
+    - Diastolic (HFpEF): EF ≥50%
+    - Combined: Both systolic and diastolic dysfunction
+
+    **Pattern Recognition:**
+    - "CHF exacerbation" → Query for "Acute on Chronic [type] Heart Failure"
+    - BNP elevated + diuretics + edema → Query heart failure if not documented
+    - Volume overload + cardiac history → Query heart failure
+    - Echo showing EF% → Use to specify systolic vs diastolic
+
+    **Statement Template:**
+    "Acute on Chronic [Systolic/Diastolic] Heart Failure, with EF of [value]%, evidenced by [symptoms/BNP/edema], requiring [treatment]"
+
+10b. **CARDIOGENIC SHOCK** (HIGH VALUE - Often Missed!)
+     - Criteria: Hypotension (SBP <90) + signs of hypoperfusion + cardiac cause
+     - Requires vasopressors or inotropes for cardiac failure
+     - Pattern: "Shock" documented but etiology not specified as cardiogenic
+     - Look for: Hypotension + low cardiac output + vasopressors + cardiac cause
+     - Statement: "Cardiogenic Shock due to [cause: acute MI, decompensated HF, etc.]"
+
+10c. **TYPE 2 MYOCARDIAL INFARCTION / DEMAND ISCHEMIA**:
+     **CRITICAL DISTINCTION:**
+     - "Demand Ischemia without MI": Troponin elevation from supply-demand mismatch, NOT meeting MI criteria
+     - "Type 2 MI (NSTEMI)": Troponin elevation + ischemic symptoms + ECG changes → IS an MI
+
+     **When to Query Type 2 MI:**
+     - Troponin elevated with clear stressor (sepsis, hypotension, tachycardia, anemia, hypoxia)
+     - WITHOUT acute coronary syndrome (no PCI, no coronary intervention)
+     - **HIGH VALUE**: Type 2 MI (I21.A1) is more specific than "demand ischemia"
+
+     **When to Query "Demand Ischemia without MI":**
+     - Troponin mildly elevated (small delta)
+     - Stressor present but explicitly stated "not consistent with MI"
+     - CDI may query to clarify: "Is this Type 2 MI or demand ischemia without MI?"
+
+     **Statement Templates:**
+     - "Type 2 Non-ST Elevation Myocardial Infarction (NSTEMI) due to demand ischemia from [cause]"
+     - "Demand ischemia without myocardial infarction, evidenced by [troponin/stressor]"
 
 **ADDITIONAL HIGH-VALUE DIAGNOSES (from .rccautoprognote):**
 
@@ -304,7 +446,13 @@ YOUR TASK:
 1. Identify diagnoses with clinical evidence that should be queried
 2. Focus on HIGH-VALUE diagnoses (those listed above)
 3. Provide specific clinical evidence from the note
-4. Be conservative - only query when evidence is clear
+4. Be thorough - a typical discharge summary has 3-8 documentation opportunities
+
+**IMPORTANT**: Most discharge summaries have MULTIPLE documentation gaps. CDI specialists typically find 3-8 opportunities per case. If you find fewer than 3, re-review the note for:
+- Lab abnormalities (electrolytes, albumin, hemoglobin) with treatment
+- Any infection + systemic symptoms (possible sepsis)
+- Nutritional markers (BMI, albumin, weight loss)
+- Severity specifiers missing (acute vs chronic, stage, location)
 
 Return JSON format:
 {{
@@ -324,18 +472,32 @@ Return JSON format:
 }}
 
 IMPORTANT:
-- Only include diagnoses with clear clinical evidence
+- Include ALL diagnoses with clinical evidence, even if you're 70% confident (let CDI specialists make final call)
 - Prioritize the top 8 categories above (they represent 60% of all queries)
 - Be specific about evidence (cite actual values from the note)
-- Don't query what's already well-documented
+- Don't query what's already well-documented AND correctly coded
+- A typical case has 3-8 opportunities - if you found fewer, re-check for missed lab abnormalities, infections, and nutritional issues
 """
 
     response = call_stanford_llm(prompt, api_key, model)
 
+    # DEBUG: Log raw response for GPT-5 investigation
+    if model.startswith("gpt-5"):
+        import os
+        debug_log = os.environ.get('CDI_DEBUG_LOG')
+        if debug_log:
+            with open(debug_log, 'a') as f:
+                f.write(f"\n{'='*80}\n")
+                f.write(f"Model: {model}\n")
+                f.write(f"Prompt length: {len(prompt)} chars\n")
+                f.write(f"Response length: {len(response)} chars\n")
+                f.write(f"Response preview (first 2000 chars):\n{response[:2000]}\n")
+                f.write(f"Response end (last 500 chars):\n{response[-500:]}\n")
+
     try:
         # Try direct JSON parse first
         result = json.loads(response)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as parse_error:
         # LLM often wraps JSON in markdown code blocks like ```json\n...\n```
         # Try to extract JSON from markdown
         import re
@@ -347,8 +509,9 @@ IMPORTANT:
                 # Still failed - response might be truncated
                 result = {
                     "missed_diagnoses": [],
-                    "error": "JSON parse failed - Response may be truncated",
-                    "raw_response": response[:1000]
+                    "error": f"JSON parse failed (markdown extract) - {str(parse_error)}",
+                    "raw_response": response[:2000],
+                    "response_length": len(response)
                 }
         else:
             # No markdown code block, try to find JSON object
@@ -356,17 +519,19 @@ IMPORTANT:
             if json_match:
                 try:
                     result = json.loads(json_match.group(0))
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as inner_error:
                     result = {
                         "missed_diagnoses": [],
-                        "error": "JSON parse failed - LLM did not return valid JSON",
-                        "raw_response": response[:1000]
+                        "error": f"JSON parse failed (regex extract) - {str(inner_error)}",
+                        "raw_response": response[:2000],
+                        "response_length": len(response)
                     }
             else:
                 result = {
                     "missed_diagnoses": [],
-                    "error": "JSON parse failed - No JSON found in response",
-                    "raw_response": response[:1000]
+                    "error": f"No JSON found in response - response starts with: {response[:200]}",
+                    "raw_response": response[:2000],
+                    "response_length": len(response)
                 }
 
     return result
