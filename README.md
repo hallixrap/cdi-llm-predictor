@@ -1,6 +1,6 @@
 # CDI Diagnosis Prediction System
 
-**Identifies diagnoses that physicians commonly miss, based on 539 actual CDI specialist queries at Stanford Healthcare**
+**Identifies diagnoses that physicians commonly miss, based on actual CDI specialist queries at Stanford Healthcare**
 
 ## Overview
 
@@ -13,77 +13,43 @@ This system helps capture diagnoses that physicians frequently forget to documen
 - Current manual process: 2,000-4,000 queries per month at Stanford
 - **Goal**: Proactively suggest these diagnoses to reduce queries by 20%
 
-### The Breakthrough
+### The Solution
 
-Training on **CDI queries** (what specialists identified as missing) rather than **RCC checkboxes** (what physicians checked) gives us the "gold standard" of what's actually missed.
+Uses Stanford's PHI-safe API with GPT-5 for intelligent diagnosis prediction, combined with LLM-as-Judge semantic matching for evaluation.
 
-## Two Approaches
+**Key Results:**
+- **58.6% recall** on 688 CDI queries
+- **Sepsis: 90.9%** (up from 24.6% baseline)
+- **Respiratory: 78.7%**
+- **Anemia: 73.3%**
+- **Estimated PPV: ~76%** (discoveries are clinically valid)
 
-### 1. LLM-Based Approach (Recommended) 🌟
+## How It Works
 
-Uses Stanford's PHI-safe API with GPT-4.1/GPT-5 for intelligent diagnosis prediction.
+1. **Input**: Discharge summary text
+2. **Processing**: GPT-5 analyzes against 22 CDI query patterns
+3. **Output**: JSON with missed diagnoses, ICD-10 codes, clinical evidence
 
-**Advantages:**
-- Understands medical context and nuance
-- Can explain reasoning with clinical evidence
-- Mirrors how CDI specialists actually think
-- Better at handling complex cases
+The system is trained on what CDI specialists actually query (the "gold standard") rather than what physicians document.
 
-**Files:**
-- `scripts/cdi_llm_predictor.py` - Main LLM predictor
-- `scripts/evaluate_llm_vs_baseline.py` - Compare LLM vs classifier
+## Files
 
-**Usage:**
-```bash
-cd /Users/chukanya/Documents/Coding/New_CDI
-source venv/bin/activate
-python3 scripts/cdi_llm_predictor.py
-```
-
-### 2. ML Classifier Baseline ✅
-
-Gradient Boosting classifier using TF-IDF features.
-
-**Performance:**
-- Test F1: 40.61% (exceeds 40% target!)
-- Improvement over v3: +11.86%
-- Best for: Heart Failure (66.7% F1), Respiratory Failure (40% F1)
-
-**Files:**
-- `scripts/04_train_category_model.py` - Training script
-- `models/category_gradient_boosting.pkl` - Trained model
-- `models/category_tfidf_vectorizer.pkl` - Feature extractor
-
-## Data
-
-### Training Dataset
-- **539 examples** from actual CDI queries (Jan-Apr 2024)
-- Gold standard: What CDI specialists identified as missing
-- Priority categories:
-  - Sepsis: 15.6% of queries
-  - Malnutrition: 8.7%
-  - Anemia: 7.6%
-  - Respiratory Failure: 5.9%
-  - Heart Failure: 5.0%
-
-### Files
-- `data/processed/training_dataset_compact.csv` - Full training set
-- `data/processed/train.csv` - Training split (431 examples)
-- `data/processed/val.csv` - Validation split (54 examples)
-- `data/processed/test.csv` - Test split (54 examples)
+- `scripts/cdi_llm_predictor.py` - Main LLM predictor with GPT-5 support
+- `scripts/evaluate_cdi_accuracy.py` - Evaluation framework with metrics
+- `scripts/llm_judge.py` - LLM-as-Judge for semantic diagnosis matching
 
 ## Quick Start
 
 ### 1. Setup Environment
 
 ```bash
-cd /Users/chukanya/Documents/Coding/New_CDI
+cd /path/to/New_CDI
 python3 -m venv venv
 source venv/bin/activate
-pip install pandas numpy scikit-learn requests
+pip install pandas numpy requests
 ```
 
-### 2. Use LLM Predictor (Recommended)
+### 2. Use the Predictor
 
 ```python
 from scripts.cdi_llm_predictor import predict_missed_diagnoses
@@ -96,35 +62,16 @@ discharge_summary = """
 """
 
 # Predict missed diagnoses
-results = predict_missed_diagnoses(discharge_summary, api_key, model="gpt-4.1")
+results = predict_missed_diagnoses(discharge_summary, api_key, model="gpt-5")
 
 # Results include:
 # - missed_diagnoses: List of diagnoses to query
 # - clinical_evidence: Supporting facts from the note
 # - reimbursement_impact: High/Medium/Low
+# - icd10_code: Suggested billing code
 ```
 
-### 3. Or Use Baseline Classifier
-
-```python
-import pickle
-import pandas as pd
-
-# Load model
-with open('models/category_gradient_boosting.pkl', 'rb') as f:
-    model = pickle.load(f)
-
-with open('models/category_tfidf_vectorizer.pkl', 'rb') as f:
-    vectorizer = pickle.load(f)
-
-# Predict
-discharge_summary = "..."
-X = vectorizer.transform([discharge_summary])
-predicted_category = model.predict(X)[0]
-print(f"Predicted CDI query category: {predicted_category}")
-```
-
-## API Setup (for LLM Approach)
+## API Setup
 
 **Stanford PHI-Safe API:**
 - Requires: Stanford VPN connection (full tunnel)
@@ -132,71 +79,43 @@ print(f"Predicted CDI query category: {predicted_category}")
 - Endpoint: `https://apim.stanfordhealthcare.org/openai-eastus2/`
 
 **Available Models:**
-- `gpt-4.1` - Recommended, balanced performance
-- `gpt-5-nano` - Faster, good for high volume
-- `gpt-4.1-mini` - Most cost-effective
+- `gpt-5` - Best performance, uses reasoning tokens
+- `gpt-4.1` - Faster, good baseline
+- `gpt-5-nano` - Fast, used for LLM-as-Judge matching
 
-**Test API:**
-```bash
-python3 scripts/test_stanford_api.py  # From CDI_Prototype directory
-```
+## Performance by Category
 
-## Project Structure
+| Category | Recall | Notes |
+|----------|--------|-------|
+| Sepsis | 90.9% | Major improvement from prompt tuning |
+| Respiratory | 78.7% | Strong performance |
+| Anemia | 73.3% | Reliable detection |
+| Malnutrition | 58.6% | Good |
+| Pressure Ulcer | 58.1% | POA/staging queries |
+| Cardiac | 57.7% | Improved from baseline |
+| Electrolytes | 52.2% | Lab-based queries |
+| Coagulation | 50.0% | Thrombocytopenia, etc. |
+| Other | 41.5% | Pathology, debridement |
+| Renal | 33.3% | Needs improvement |
 
-```
-New_CDI/
-├── data/
-│   ├── raw/                    # Original CDI query data
-│   └── processed/              # Train/val/test splits
-├── scripts/
-│   ├── 01_explore_data.py             # Data exploration
-│   ├── 02_create_splits.py            # Create train/val/test
-│   ├── 03_train_baseline_model.py     # String matching baseline
-│   ├── 04_train_category_model.py     # Category classifier (BEST)
-│   ├── cdi_llm_predictor.py           # LLM-based predictor
-│   └── evaluate_llm_vs_baseline.py    # Compare approaches
-├── models/
-│   ├── category_gradient_boosting.pkl     # Trained classifier
-│   └── category_tfidf_vectorizer.pkl      # Feature extractor
-├── results/
-│   ├── category_model_evaluation.json     # Baseline metrics
-│   ├── category_test_predictions.csv      # Test set predictions
-│   └── confusion_matrix.png               # Visualization
-└── README.md                   # This file
-```
+## Key Technical Details
 
-## Performance Comparison
+### GPT-5 Reasoning Tokens
 
-| Approach | F1 Score | Strengths | Use Case |
-|----------|----------|-----------|----------|
-| **v3 (RCC checkboxes)** | 28.75% | Baseline | Reference only |
-| **v5 Classifier** | 40.61% | Fast, offline | High-volume screening |
-| **v5 LLM** | TBD | Best quality, explains reasoning | Final validation |
+GPT-5 uses "reasoning tokens" that count against `max_completion_tokens` but don't appear in output. The system sets `max_completion_tokens: 16000` to allow ~12k reasoning + ~4k output.
 
-## Priority Diagnosis Performance (Baseline)
+### LLM-as-Judge Matching
 
-| Category | Test F1 | Examples |
-|----------|---------|----------|
-| Heart Failure | 66.7% | 2 |
-| Respiratory Failure | 40.0% | 3 |
-| Malnutrition | 28.6% | 5 |
-| Sepsis | 15.4% | 8 (needs improvement) |
-| Anemia | 0.0% | 4 (needs improvement) |
+Uses `gpt-5-nano` for semantic matching between predicted and actual diagnoses. This improves recall by catching clinical equivalents (e.g., "Sepsis due to pneumonia" matches "Sepsis, clinically valid").
 
-## Key Insights from CDI Query Analysis
+## Priority Diagnosis Categories
 
-1. **97.8% of queries are single diagnosis** - Don't overcomplicate multi-label prediction
-2. **Queries happen fast** (median 0 days after discharge) - This enables prospective intervention
-3. **Sepsis is #1 priority** (15.6%) but hardest to predict - Focus here for improvement
-4. **Most queries are for high-value Major CC/MCC diagnoses** - Direct financial impact
-
-## Next Steps to Improve
-
-1. **Evaluate LLM approach** - Run `evaluate_llm_vs_baseline.py` to compare
-2. **For Sepsis improvement**: Add SIRS criteria extraction, infection markers
-3. **Feature engineering**: Extract structured data (labs, vitals, medications)
-4. **Ensemble approach**: Combine LLM + classifier predictions
-5. **More training data**: Current 539 examples limit performance
+Based on 539 actual CDI queries:
+1. **Sepsis**: 15.6% of queries - highest priority
+2. **Malnutrition**: 8.7%
+3. **Anemia**: 7.6%
+4. **Respiratory Failure**: 5.9%
+5. **Heart Failure**: 5.0%
 
 ## Financial Impact
 
@@ -210,10 +129,3 @@ Based on Michelle McCormack (CDI Director):
 
 - API Access: Fateme Nateghi
 - CDI Leadership: Michelle McCormack (Director), Jason Hom (Medical Director)
-- Project Context: See `Complete Context for Claude Code - RCC Prediction with CDI Gold Standard.md`
-
-## References
-
-- Similar approach to billing code extractor in `/CDI_Prototype/`
-- Uses same Stanford PHI-safe API infrastructure
-- Based on real CDI practice patterns at Stanford Healthcare
