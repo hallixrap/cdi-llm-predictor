@@ -76,6 +76,7 @@ paper/
 
 # Docs folder (local documentation)
 docs/
+!docs/SQL_QUERIES.md
 
 # Debug/test scripts (temporary)
 scripts/test_gpt5_*.py
