@@ -61,9 +61,6 @@ temp/
 # Archived old files (not needed in repo)
 _ARCHIVE_OLD_FILES/
 
-# Meeting transcripts and notes (not code)
-*_transcript*.txt
-block_transcript.txt
 
 # Word documents
 *.docx
@@ -98,5 +95,4 @@ scripts/compare_models.py
 scripts/deidentify_notes.py
 scripts/evaluate_rcc_accuracy.py
 scripts/fix_rcc_sections.py
-scripts/parse_cdi_queries.py
 scripts/retry_failed_cases.py

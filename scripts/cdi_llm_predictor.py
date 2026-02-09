@@ -8,6 +8,7 @@ that physicians frequently forget to document, leaving money on the table.
 """
 
 import json
+import re
 import requests
 import pandas as pd
 from typing import Dict, List
@@ -104,17 +105,137 @@ def call_stanford_llm(prompt: str, api_key: str, model: str = "gpt-4.1") -> str:
         raise Exception(f"Unexpected API response format: {response.text[:500]}. Error: {e}")
 
 
-def predict_missed_diagnoses(discharge_summary: str, api_key: str, model: str = "gpt-4.1") -> Dict:
+def extract_documented_diagnoses(discharge_summary: str) -> List[str]:
+    """
+    Extract diagnoses already documented in structured sections of the discharge summary.
+    Used to filter out LLM predictions that match already-documented conditions.
+
+    Handles both newline-separated and multi-space-separated text formats
+    (BigQuery CSV exports often flatten newlines to double spaces).
+    """
+    documented = []
+
+    # Normalize: replace 2+ spaces with newlines so section parsing works uniformly
+    text = re.sub(r'  +', '\n', discharge_summary)
+
+    # Section headers that contain documented diagnoses
+    section_headers = [
+        r'Discharge\s+Diagnos[ei]s',
+        r'Admitting\s+Diagnos[ei]s',
+        r'Principal\s+Diagnos[ei]s',
+        r'Secondary\s+Diagnos[ei]s',
+        r'Active\s+Problems?',
+        r'Problem\s+List',
+    ]
+
+    for header in section_headers:
+        pattern = header + r'\s*:?\s*\n(.*?)(?=\n[A-Z][A-Za-z\s/]{3,}:|$)'
+        matches = re.findall(pattern, text, re.DOTALL | re.IGNORECASE)
+        for match in matches:
+            for line in match.split('\n'):
+                line = line.strip()
+                if not line or len(line) < 4:
+                    continue
+                # Skip treatment/management sub-bullets (start with -)
+                if line.startswith('-') and any(kw in line.lower() for kw in
+                    ['continue', 'monitor', 'start', 'wean', 'switch', 'given',
+                     'improved', 'stable', 'mg', 'iv', 'po', 'bid', 'tid',
+                     'daily', 'prn', 'as needed', 'prophylaxis', 'dispo',
+                     'supplemental', 'oxygen', 'fluid', 'echo', 'lasix',
+                     'trelegy', 'ipratropium', 'eliquis', 'ambien', 'xanax']):
+                    continue
+                # Clean up leading bullets/dashes/numbers
+                cleaned = re.sub(r'^[\s\-\*\d\.]+', '', line).strip()
+                if cleaned and len(cleaned) > 3:
+                    documented.append(cleaned)
+
+    # Also extract #Problem formatted lines (common in Stanford EMR notes)
+    hash_problems = re.findall(r'^#\s*(.+)', text, re.MULTILINE)
+    for prob in hash_problems:
+        cleaned = prob.strip()
+        if cleaned and len(cleaned) > 3:
+            documented.append(cleaned)
+
+    return documented
+
+
+def filter_already_documented(predictions: List[Dict], documented_diagnoses: List[str]) -> List[Dict]:
+    """
+    Filter out LLM predictions that match already-documented diagnoses.
+    Keeps predictions that represent specificity upgrades.
+    """
+    if not documented_diagnoses:
+        return predictions
+
+    doc_lower = [d.lower() for d in documented_diagnoses]
+
+    filtered = []
+    for pred in predictions:
+        dx = pred.get('diagnosis', '').lower()
+        if not dx:
+            continue
+
+        # Check if this diagnosis is already documented
+        is_documented = False
+        for doc_dx in doc_lower:
+            # Direct substring match (either direction)
+            if dx in doc_dx or doc_dx in dx:
+                is_documented = True
+                break
+            # Key clinical term overlap
+            dx_terms = set(re.sub(r'[^\w\s]', '', dx).split()) - {
+                'and', 'or', 'the', 'a', 'an', 'with', 'without', 'due', 'to',
+                'of', 'in', 'on', 'acute', 'chronic', 'unspecified', 'secondary'}
+            doc_terms = set(re.sub(r'[^\w\s]', '', doc_dx).split()) - {
+                'and', 'or', 'the', 'a', 'an', 'with', 'without', 'due', 'to',
+                'of', 'in', 'on', 'acute', 'chronic', 'unspecified', 'secondary'}
+            if dx_terms and doc_terms:
+                overlap = len(dx_terms & doc_terms) / max(len(dx_terms), len(doc_terms))
+                if overlap >= 0.5:
+                    is_documented = True
+                    break
+
+        if not is_documented:
+            filtered.append(pred)
+        elif 'specificity' in pred.get('query_reasoning', '').lower() or \
+             'upgrade' in pred.get('query_reasoning', '').lower():
+            # Keep specificity upgrades even if base condition is documented
+            filtered.append(pred)
+
+    return filtered
+
+
+def predict_missed_diagnoses(discharge_summary: str, api_key: str, model: str = "gpt-4.1",
+                             filter_documented: bool = True,
+                             progress_note: str = None) -> Dict:
     """
     Predict diagnoses that CDI specialists would query about.
 
     Identifies clinically supported diagnoses that are missing or unclear
     in physician documentation.
+
+    Args:
+        filter_documented: If True, post-filter predictions that match
+            already-documented diagnoses in the discharge summary.
+        progress_note: Optional latest progress note to provide additional
+            clinical context (labs, vitals, assessments not in discharge summary).
     """
+
+    progress_note_section = ""
+    if progress_note:
+        progress_note_section = (
+            "\nLATEST PROGRESS NOTE (additional clinical context — labs, vitals, assessments):\n"
+            + progress_note + "\n"
+        )
 
     prompt = f"""You are a Clinical Documentation Integrity (CDI) specialist at Stanford Healthcare reviewing a discharge summary.
 
 YOUR ROLE: Identify diagnoses that are clinically supported by evidence in the note but are MISSING or UNCLEAR in the physician's documentation. Use the SPECIFIC CLINICAL CRITERIA below - but remember discharge notes are messy, so use clinical judgment alongside the rules.
+
+**CRITICAL — DO NOT FLAG ALREADY-DOCUMENTED CONDITIONS:**
+Before suggesting ANY diagnosis, check the Discharge Diagnoses, Problem List, and Assessment sections of the note. If a condition is ALREADY LISTED there (even with slightly different wording), DO NOT include it in your output. CDI specialists will already see these. Only flag diagnoses that are:
+1. NOT listed in any diagnosis/problem list section but have clinical evidence in the note body (labs, vitals, treatments)
+2. Listed but with INSUFFICIENT SPECIFICITY that would change the ICD-10 code (e.g., "heart failure" documented but evidence supports "acute diastolic heart failure" — flag the specificity upgrade ONLY)
 
 **BILLING CODE OPTIMIZATION (IMPORTANT):**
 CDI specialists look for the MOST SPECIFIC diagnosis that is clinically supported to maximize reimbursement accuracy:
@@ -441,18 +562,21 @@ Remember: Discharge notes are MESSY. The rules above are guidelines from .rccaut
 
 DISCHARGE SUMMARY TO REVIEW:
 {discharge_summary}
-
+{progress_note_section}
 YOUR TASK:
-1. Identify diagnoses with clinical evidence that should be queried
-2. Focus on HIGH-VALUE diagnoses (those listed above)
-3. Provide specific clinical evidence from the note
-4. Be thorough - a typical discharge summary has 3-8 documentation opportunities
+1. First, READ the Discharge Diagnoses / Problem List sections and note what is ALREADY documented
+2. Then, identify diagnoses with clinical evidence that are MISSING from that list or need specificity upgrades
+3. Focus on HIGH-VALUE diagnoses (those listed above)
+4. Provide specific clinical evidence from the note
 
-**IMPORTANT**: Most discharge summaries have MULTIPLE documentation gaps. CDI specialists typically find 3-8 opportunities per case. If you find fewer than 3, re-review the note for:
-- Lab abnormalities (electrolytes, albumin, hemoglobin) with treatment
-- Any infection + systemic symptoms (possible sepsis)
-- Nutritional markers (BMI, albumin, weight loss)
-- Severity specifiers missing (acute vs chronic, stage, location)
+If you find conditions that ARE documented but could be MORE SPECIFIC (e.g., "anemia" is listed but evidence supports "acute blood loss anemia"), flag the specificity upgrade only.
+
+**CATEGORY-SPECIFIC CHECKS** (always verify these even if not immediately obvious):
+- MALNUTRITION: Check albumin (<3.5), BMI (<18.5 or >30 with weight loss), dietitian consults, TPN/tube feeds, "poor PO intake", weight loss mentions. This is the #2 most queried category.
+- ELECTROLYTES: Scan for ANY abnormal sodium, potassium, calcium, magnesium, phosphorus with treatment.
+- SEPSIS: Any infection + SIRS criteria (temp, HR, WBC, lactate) + antibiotics = possible sepsis query.
+- HEART FAILURE: BNP >400, diuretics, edema — check if specificity (systolic vs diastolic, acute vs chronic) is documented.
+- PRESSURE INJURIES: Any wound care, wound consults, Braden score — check stage/location/POA specificity.
 
 Return JSON format:
 {{
@@ -472,11 +596,11 @@ Return JSON format:
 }}
 
 IMPORTANT:
-- Include ALL diagnoses with clinical evidence, even if you're 70% confident (let CDI specialists make final call)
+- ONLY flag diagnoses that are MISSING from the documented diagnosis list or need a specificity upgrade
+- DO NOT flag conditions already listed in Discharge Diagnoses/Problem List — even if you can find clinical evidence for them, the physician already documented them
 - Prioritize the top 8 categories above (they represent 60% of all queries)
 - Be specific about evidence (cite actual values from the note)
-- Don't query what's already well-documented AND correctly coded
-- A typical case has 3-8 opportunities - if you found fewer, re-check for missed lab abnormalities, infections, and nutritional issues
+- Quality over quantity: 2-3 high-confidence, truly undocumented findings are better than 8 that include already-documented conditions
 """
 
     response = call_stanford_llm(prompt, api_key, model)
@@ -533,6 +657,16 @@ IMPORTANT:
                     "raw_response": response[:2000],
                     "response_length": len(response)
                 }
+
+    # Post-processing: filter out predictions matching already-documented diagnoses
+    if filter_documented and 'missed_diagnoses' in result:
+        original_count = len(result['missed_diagnoses'])
+        documented = extract_documented_diagnoses(discharge_summary)
+        if documented:
+            result['missed_diagnoses'] = filter_already_documented(
+                result['missed_diagnoses'], documented)
+            result['_documented_diagnoses_found'] = documented
+            result['_filtered_count'] = original_count - len(result['missed_diagnoses'])
 
     return result
 

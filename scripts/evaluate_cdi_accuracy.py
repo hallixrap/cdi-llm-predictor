@@ -191,7 +191,7 @@ def diagnoses_match(pred_dx: str, true_dx: str, threshold: float = 0.5) -> bool:
 def evaluate_single_case(discharge_summary: str, true_diagnoses: List[str],
                          api_key: str, case_id: str, model: str = "gpt-4.1",
                          verbose: bool = False, use_llm_judge: bool = False,
-                         llm_matcher=None) -> Dict:
+                         llm_matcher=None, progress_note: str = None) -> Dict:
     """
     Evaluate LLM predictor on a single case.
 
@@ -204,6 +204,7 @@ def evaluate_single_case(discharge_summary: str, true_diagnoses: List[str],
         verbose: Print debug info
         use_llm_judge: Use LLM-based semantic matching (slower but more accurate)
         llm_matcher: Pre-initialized HybridMatcher instance (to share cache)
+        progress_note: Optional progress note for additional clinical context
     """
 
     if verbose:
@@ -212,7 +213,8 @@ def evaluate_single_case(discharge_summary: str, true_diagnoses: List[str],
 
     try:
         # Call LLM predictor
-        result = predict_missed_diagnoses(discharge_summary, api_key, model=model)
+        result = predict_missed_diagnoses(discharge_summary, api_key, model=model,
+                                          progress_note=progress_note)
 
         # Extract predicted diagnoses
         missed = result.get('missed_diagnoses', [])
@@ -347,38 +349,26 @@ def run_evaluation(df: pd.DataFrame, api_key: str, model: str = "gpt-4.1",
 
         # Extract CDI diagnoses - prefer the cleaned/parsed version
         true_diagnoses = []
-        parsed_column_exists = False
 
-        # First, check for cleaned cdi_diagnoses_parsed column (best quality)
-        # If this column exists and was parsed, do NOT fall back to cdi_diagnoses
-        # An empty list means "no confirmed diagnoses" - intentional skip
-        if 'cdi_diagnoses_parsed' in row:
-            parsed_val = row['cdi_diagnoses_parsed']
-            if isinstance(parsed_val, list):
-                true_diagnoses = parsed_val
-                parsed_column_exists = True
-            elif isinstance(parsed_val, str) and parsed_val:
-                if parsed_val.startswith('['):
+        # Check columns in priority order: confirmed > parsed > raw cdi_diagnoses
+        for col_name in ['cdi_diagnoses_confirmed', 'cdi_diagnoses_parsed', 'cdi_diagnoses']:
+            if col_name not in row:
+                continue
+            col_val = row[col_name]
+            if isinstance(col_val, list):
+                true_diagnoses = col_val
+                break
+            elif isinstance(col_val, str) and col_val:
+                if col_val.startswith('['):
                     try:
-                        true_diagnoses = eval(parsed_val)
-                        parsed_column_exists = True  # Successfully parsed (even if empty)
+                        true_diagnoses = eval(col_val)
+                        break
                     except:
                         pass
-
-        # Only fallback to cdi_diagnoses if parsed column doesn't exist
-        if not parsed_column_exists and not true_diagnoses and 'cdi_diagnoses' in row:
-            cdi_val = row['cdi_diagnoses']
-            if isinstance(cdi_val, list):
-                true_diagnoses = cdi_val
-            elif isinstance(cdi_val, str) and cdi_val:
-                if cdi_val.startswith('['):
-                    try:
-                        true_diagnoses = eval(cdi_val)
-                    except:
-                        true_diagnoses = [cdi_val]
-                else:
+                elif col_name == 'cdi_diagnoses':
                     # Don't split on comma - diagnoses often contain commas
-                    true_diagnoses = [cdi_val]
+                    true_diagnoses = [col_val]
+                    break
 
         # Last resort: parse from raw query
         if not true_diagnoses:
@@ -390,7 +380,13 @@ def run_evaluation(df: pd.DataFrame, api_key: str, model: str = "gpt-4.1",
         if not true_diagnoses:
             continue
 
-        print(f"Processing {idx+1}/{len(df)}: {case_id} ({len(true_diagnoses)} CDI queries)")
+        # Get progress note if available
+        progress_note = None
+        if 'progress_note' in row and pd.notna(row.get('progress_note')):
+            progress_note = row['progress_note']
+
+        print(f"Processing {idx+1}/{len(df)}: {case_id} ({len(true_diagnoses)} CDI queries)" +
+              (" [+progress note]" if progress_note else ""))
 
         result = evaluate_single_case(
             discharge_summary=discharge_summary,
@@ -400,7 +396,8 @@ def run_evaluation(df: pd.DataFrame, api_key: str, model: str = "gpt-4.1",
             model=model,
             verbose=verbose,
             use_llm_judge=use_llm_judge,
-            llm_matcher=llm_matcher
+            llm_matcher=llm_matcher,
+            progress_note=progress_note
         )
         results.append(result)
 
@@ -573,7 +570,8 @@ def save_results(results: List[Dict], summary: Dict, output_dir: str = "results"
     print(f"✅ Summary saved to: {summary_path}")
 
     # Clean up checkpoint file after successful completion
-    if checkpoint_file and os.path.exists(checkpoint_file):
+    checkpoint_file = '/tmp/cdi_evaluation_checkpoint.json'
+    if os.path.exists(checkpoint_file):
         try:
             os.remove(checkpoint_file)
         except:
@@ -584,8 +582,10 @@ def save_results(results: List[Dict], summary: Dict, output_dir: str = "results"
 
 def main():
     parser = argparse.ArgumentParser(description='Evaluate CDI LLM predictor accuracy')
-    parser.add_argument('--data', type=str, default='SQL queries/training_dataset_parsed_fixed.csv',
+    parser.add_argument('--data', type=str, default='data/cdi_linked_discharge_cleaned_confirmed_only.csv',
                         help='Path to evaluation dataset')
+    parser.add_argument('--sample', type=int, default=None,
+                        help='Randomly sample N cases (use instead of --limit for unbiased eval)')
     parser.add_argument('--model', type=str, default='gpt-4.1',
                         choices=['gpt-4.1', 'gpt-5', 'gpt-5-nano', 'gpt-4.1-mini', 'claude-opus-4', 'claude-sonnet-4'],
                         help='LLM model to use')
@@ -617,10 +617,10 @@ def main():
     if not os.path.exists(args.data):
         # Try alternate paths
         alt_paths = [
+            'data/cdi_linked_discharge_cleaned_confirmed_only.csv',
+            'data/cdi_linked_discharge_cleaned.csv',
             'SQL queries/training_dataset_parsed_fixed.csv',
             'SQL queries/training_dataset_parsed.csv',
-            'SQL queries/training_dataset_compact.csv',
-            'SQL queries/cdi_linked_clinical_discharge_fixed.csv'
         ]
         for alt_path in alt_paths:
             if os.path.exists(alt_path):
@@ -642,6 +642,14 @@ def main():
         if col not in df.columns:
             print(f"❌ Missing required column: {col}")
             return 1
+
+    # Random sampling (unbiased evaluation)
+    if args.sample:
+        if args.sample < len(df):
+            df = df.sample(n=args.sample, random_state=42)
+            print(f"\nRandomly sampled {args.sample} cases (seed=42 for reproducibility)")
+        else:
+            print(f"\nSample size {args.sample} >= dataset size {len(df)}, using all cases")
 
     # Set limit
     limit = args.limit
