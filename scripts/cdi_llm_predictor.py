@@ -9,6 +9,7 @@ that physicians frequently forget to document, leaving money on the table.
 
 import json
 import re
+import time
 import requests
 import pandas as pd
 from typing import Dict, List
@@ -65,17 +66,39 @@ def call_stanford_llm(prompt: str, api_key: str, model: str = "gpt-4.1") -> str:
             request_body["max_tokens"] = 4000
         payload = json.dumps(request_body)
 
-    response = requests.post(url, headers=headers, data=payload, timeout=120)
+    # Retry with exponential backoff for transient errors (rate limits, timeouts)
+    max_retries = 5
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(url, headers=headers, data=payload, timeout=120)
 
-    # Check for HTTP errors
-    if response.status_code != 200:
-        error_msg = f"API Error {response.status_code}: {response.text}"
-        if response.status_code == 401:
-            error_msg += "\n\nPossible causes:"
-            error_msg += "\n1. API key has expired - contact Fateme Nateghi for new credentials"
-            error_msg += "\n2. Not connected to Stanford VPN (required for PHI-safe API access)"
-            error_msg += "\n3. API key format is incorrect"
-        raise Exception(error_msg)
+            if response.status_code == 429 or response.status_code >= 500:
+                # Rate limited or server error — retry with backoff
+                wait = 2 ** attempt + 1  # 2, 3, 5, 9, 17 seconds
+                print(f"  ⏳ API {response.status_code}, retrying in {wait}s (attempt {attempt+1}/{max_retries})")
+                time.sleep(wait)
+                continue
+
+            if response.status_code != 200:
+                error_msg = f"API Error {response.status_code}: {response.text}"
+                if response.status_code == 401:
+                    error_msg += "\n\nPossible causes:"
+                    error_msg += "\n1. API key has expired - contact Fateme Nateghi for new credentials"
+                    error_msg += "\n2. Not connected to Stanford VPN (required for PHI-safe API access)"
+                    error_msg += "\n3. API key format is incorrect"
+                raise Exception(error_msg)
+
+            break  # Success
+        except requests.exceptions.RequestException as e:
+            if attempt < max_retries - 1:
+                wait = 2 ** attempt + 1
+                print(f"  ⏳ Connection error, retrying in {wait}s (attempt {attempt+1}/{max_retries}): {e}")
+                time.sleep(wait)
+            else:
+                raise
+
+    # Throttle: brief pause between calls to avoid rate limits
+    time.sleep(0.5)
 
     # Parse response - Claude vs OpenAI have different formats
     try:
