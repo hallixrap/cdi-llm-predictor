@@ -15,7 +15,8 @@ import pandas as pd
 from typing import Dict, List
 from datetime import datetime
 
-def call_stanford_llm(prompt: str, api_key: str, model: str = "gpt-4.1") -> str:
+
+def call_stanford_llm(system_prompt: str, prompt: str, api_key: str, model: str = "gpt-4.1") -> str:
     """Call Stanford's PHI-safe LLM"""
     headers = {
         'Ocp-Apim-Subscription-Key': api_key,
@@ -45,14 +46,20 @@ def call_stanford_llm(prompt: str, api_key: str, model: str = "gpt-4.1") -> str:
         payload = json.dumps({
             "model": claude_model_map.get(model, model),
             "max_tokens": 4000,
-            "messages": [{"role": "user", "content": prompt}]
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ]
         })
     else:
         # OpenAI format - GPT-5 models have different API requirements
         is_gpt5 = model.startswith("gpt-5")
         request_body = {
             "model": model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ],
         }
         # GPT-5 doesn't support custom temperature, only uses max_completion_tokens
         # IMPORTANT: GPT-5 uses reasoning tokens BEFORE output tokens. With complex prompts,
@@ -75,7 +82,7 @@ def call_stanford_llm(prompt: str, api_key: str, model: str = "gpt-4.1") -> str:
             if response.status_code == 429 or response.status_code >= 500:
                 # Rate limited or server error — retry with backoff
                 wait = 2 ** attempt + 1  # 2, 3, 5, 9, 17 seconds
-                print(f"  ⏳ API {response.status_code}, retrying in {wait}s (attempt {attempt+1}/{max_retries})")
+                print(f"  ⏳ API {response.status_code} ({response.text}), retrying in {wait}s (attempt {attempt+1}/{max_retries})")
                 time.sleep(wait)
                 continue
 
@@ -251,7 +258,7 @@ def predict_missed_diagnoses(discharge_summary: str, api_key: str, model: str = 
             + progress_note + "\n"
         )
 
-    prompt = f"""You are a Clinical Documentation Integrity (CDI) specialist at Stanford Healthcare reviewing a discharge summary.
+    system_prompt = f"""You are a Clinical Documentation Integrity (CDI) specialist at Stanford Healthcare reviewing a discharge summary.
 
 YOUR ROLE: Identify diagnoses that are clinically supported by evidence in the note but are MISSING or UNCLEAR in the physician's documentation. Use the SPECIFIC CLINICAL CRITERIA below - but remember discharge notes are messy, so use clinical judgment alongside the rules.
 
@@ -583,15 +590,6 @@ Remember: Discharge notes are MESSY. The rules above are guidelines from .rccaut
 4. Be specific with evidence - cite actual values, medications, treatments from the note
 5. Only query when evidence is clear and diagnosis is MISSING or UNCLEAR
 
-DISCHARGE SUMMARY TO REVIEW:
-{discharge_summary}
-{progress_note_section}
-YOUR TASK:
-1. First, READ the Discharge Diagnoses / Problem List sections and note what is ALREADY documented
-2. Then, identify diagnoses with clinical evidence that are MISSING from that list or need specificity upgrades
-3. Focus on HIGH-VALUE diagnoses (those listed above)
-4. Provide specific clinical evidence from the note
-
 If you find conditions that ARE documented but could be MORE SPECIFIC (e.g., "anemia" is listed but evidence supports "acute blood loss anemia"), flag the specificity upgrade only.
 
 **CATEGORY-SPECIFIC CHECKS** (always verify these even if not immediately obvious):
@@ -626,7 +624,19 @@ IMPORTANT:
 - Quality over quantity: 2-3 high-confidence, truly undocumented findings are better than 8 that include already-documented conditions
 """
 
-    response = call_stanford_llm(prompt, api_key, model)
+    prompt = f"""
+YOUR TASK:
+1. First, READ the Discharge Diagnoses / Problem List sections and note what is ALREADY documented
+2. Then, identify diagnoses with clinical evidence that are MISSING from that list or need specificity upgrades
+3. Focus on HIGH-VALUE diagnoses (those listed above)
+4. Provide specific clinical evidence from the note
+
+DISCHARGE SUMMARY TO REVIEW:
+{discharge_summary}
+{progress_note_section}
+"""
+
+    response = call_stanford_llm(system_prompt, prompt, api_key, model)
 
     # DEBUG: Log raw response for GPT-5 investigation
     if model.startswith("gpt-5"):
