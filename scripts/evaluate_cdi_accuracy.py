@@ -19,6 +19,8 @@ Usage:
     # Test mode (first 10 cases)
     python scripts/evaluate_cdi_accuracy.py --test
 """
+import concurrent.futures
+from concurrent.futures import Future
 
 import pandas as pd
 import json
@@ -27,7 +29,7 @@ import sys
 import os
 import argparse
 from datetime import datetime
-from typing import List, Dict, Tuple, Set
+from typing import List, Dict, Tuple, Set, Hashable
 from collections import Counter
 from cdi_llm_predictor import predict_missed_diagnoses
 
@@ -287,7 +289,8 @@ def evaluate_single_case(discharge_summary: str, true_diagnoses: List[str],
 
 def run_evaluation(df: pd.DataFrame, api_key: str, model: str = "gpt-4.1",
                    limit: int = None, verbose: bool = False,
-                   use_llm_judge: bool = False, judge_model: str = "gpt-5-nano") -> Tuple[List[Dict], Dict]:
+                   use_llm_judge: bool = False, judge_model: str = "gpt-5-nano",
+                   max_workers: int = 4) -> Tuple[List[Dict], Dict]:
     """
     Run full evaluation on dataset.
 
@@ -324,90 +327,96 @@ def run_evaluation(df: pd.DataFrame, api_key: str, model: str = "gpt-4.1",
         df = df.head(limit)
         print(f"(Limited to {limit} cases for testing)")
 
-    results = []
+    results_by_idx = {}
 
     # Checkpoint file for resuming if interrupted
     checkpoint_file = None
     if limit is None:  # Only checkpoint for full runs
-        import os
         checkpoint_file = '/tmp/cdi_evaluation_checkpoint.json'
         if os.path.exists(checkpoint_file):
             try:
                 with open(checkpoint_file, 'r') as f:
-                    checkpoint_data = json.load(f)
-                    results = checkpoint_data.get('results', [])
-                    start_idx = checkpoint_data.get('last_index', 0) + 1
-                    print(f"\n📌 Resuming from checkpoint: starting at index {start_idx}")
-                    df = df.iloc[start_idx:]
-            except:
-                print("⚠️  Checkpoint file corrupt, starting fresh")
+                    results_by_idx = json.load(f)
+                    print(f"\n📌 Resuming from checkpoint: completed {len(results_by_idx)} cases")
+                    df.drop(index=df.iloc[[int(i) for i in results_by_idx.keys()]].index, inplace=True)
+            except Exception as e:
+                print(f"⚠️  Checkpoint file corrupt: {e}. Starting fresh")
 
-    for idx, row in df.iterrows():
-        # Support multiple ID column names
-        case_id = row.get('patient_id', row.get('anon_id', f'case_{idx}'))
-        discharge_summary = row['discharge_summary']
+    future_ids: Dict[Future, Hashable] = {}
+    print(f"🏃 Running with {max_workers} threads")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for idx, row in df.iterrows():
+            # Support multiple ID column names
+            case_id = row.get('patient_id', row.get('anon_id', f'case_{idx}'))
+            discharge_summary = row['discharge_summary']
 
-        # Extract CDI diagnoses - prefer the cleaned/parsed version
-        true_diagnoses = []
+            # Extract CDI diagnoses - prefer the cleaned/parsed version
+            true_diagnoses = []
 
-        # Check columns in priority order: confirmed > parsed > raw cdi_diagnoses
-        for col_name in ['cdi_diagnoses_confirmed', 'cdi_diagnoses_parsed', 'cdi_diagnoses']:
-            if col_name not in row:
-                continue
-            col_val = row[col_name]
-            if isinstance(col_val, list):
-                true_diagnoses = col_val
-                break
-            elif isinstance(col_val, str) and col_val:
-                if col_val.startswith('['):
-                    try:
-                        true_diagnoses = eval(col_val)
-                        break
-                    except:
-                        pass
-                elif col_name == 'cdi_diagnoses':
-                    # Don't split on comma - diagnoses often contain commas
-                    true_diagnoses = [col_val]
+            # Check columns in priority order: confirmed > parsed > raw cdi_diagnoses
+            for col_name in ['cdi_diagnoses_confirmed', 'cdi_diagnoses_parsed', 'cdi_diagnoses']:
+                if col_name not in row:
+                    continue
+                col_val = row[col_name]
+                if isinstance(col_val, list):
+                    true_diagnoses = col_val
                     break
+                elif isinstance(col_val, str) and col_val:
+                    if col_val.startswith('['):
+                        try:
+                            true_diagnoses = eval(col_val)
+                            break
+                        except:
+                            pass
+                    elif col_name == 'cdi_diagnoses':
+                        # Don't split on comma - diagnoses often contain commas
+                        true_diagnoses = [col_val]
+                        break
 
-        # Last resort: parse from raw query
-        if not true_diagnoses:
-            query_text = row.get('cdi_query_raw', row.get('query_text', ''))
-            if query_text:
-                true_diagnoses = extract_cdi_diagnosis_from_query(query_text)
+            # Last resort: parse from raw query
+            if not true_diagnoses:
+                query_text = row.get('cdi_query_raw', row.get('query_text', ''))
+                if query_text:
+                    true_diagnoses = extract_cdi_diagnosis_from_query(query_text)
 
-        # Skip if no confirmed diagnoses (includes unchecked-only queries)
-        if not true_diagnoses:
-            continue
+            # Skip if no confirmed diagnoses (includes unchecked-only queries)
+            if not true_diagnoses:
+                continue
 
-        # Get progress note if available
-        progress_note = None
-        if 'progress_note' in row and pd.notna(row.get('progress_note')):
-            progress_note = row['progress_note']
+            # Get progress note if available
+            progress_note = None
+            if 'progress_note' in row and pd.notna(row.get('progress_note')):
+                progress_note = row['progress_note']
 
-        print(f"Processing {idx+1}/{len(df)}: {case_id} ({len(true_diagnoses)} CDI queries)" +
-              (" [+progress note]" if progress_note else ""))
+            print(f"Processing {idx+1}/{len(df)}: {case_id} ({len(true_diagnoses)} CDI queries)" +
+                  (" [+progress note]" if progress_note else ""))
 
-        result = evaluate_single_case(
-            discharge_summary=discharge_summary,
-            true_diagnoses=true_diagnoses,
-            api_key=api_key,
-            case_id=case_id,
-            model=model,
-            verbose=verbose,
-            use_llm_judge=use_llm_judge,
-            llm_matcher=llm_matcher,
-            progress_note=progress_note
-        )
-        results.append(result)
+            future_result = executor.submit(
+                evaluate_single_case,
+                discharge_summary,
+                true_diagnoses,
+                api_key,
+                case_id,
+                model,
+                verbose,
+                use_llm_judge,
+                llm_matcher,
+                progress_note
+            )
+            future_ids[future_result] = idx
 
-        # Save checkpoint every 10 cases for full runs
-        if checkpoint_file and len(results) % 10 == 0:
-            try:
-                with open(checkpoint_file, 'w') as f:
-                    json.dump({'results': results, 'last_index': idx}, f)
-            except:
-                pass  # Don't fail if checkpoint save fails
+        for future in concurrent.futures.as_completed(future_ids):
+            results_by_idx[future_ids[future]] = future.result()
+
+            # Save checkpoint every 10 cases for full runs
+            if checkpoint_file and len(results_by_idx) % 10 == 0:
+                print(f"💾 Creating checkpoint file with {len(results_by_idx)} completed results")
+                try:
+                    with open(checkpoint_file, 'w') as f:
+                        json.dump(results_by_idx, f)
+                except:
+                    pass  # Don't fail if checkpoint save fails
+    results = results_by_idx.values()
 
     # Calculate aggregate metrics
     successful = [r for r in results if r.get('success', False)]
@@ -581,6 +590,8 @@ def save_results(results: List[Dict], summary: Dict, output_dir: str = "results"
 
 
 def main():
+    start_time = datetime.now()
+
     parser = argparse.ArgumentParser(description='Evaluate CDI LLM predictor accuracy')
     parser.add_argument('--data', type=str, default='data/cdi_linked_discharge_cleaned_confirmed_only.csv',
                         help='Path to evaluation dataset')
@@ -602,6 +613,8 @@ def main():
     parser.add_argument('--judge-model', type=str, default='gpt-5-nano',
                         choices=['gpt-5-nano', 'gpt-4.1-mini'],
                         help='Model to use for LLM judge (default: gpt-5-nano)')
+    parser.add_argument('--max-worker-threads', type=int, default=4,
+                        help='Maximum parallel worker threads to submit cases for evaluation')
 
     args = parser.parse_args()
 
@@ -665,7 +678,8 @@ def main():
         limit=limit,
         verbose=args.verbose,
         use_llm_judge=args.llm_judge,
-        judge_model=args.judge_model
+        judge_model=args.judge_model,
+        max_workers=args.max_worker_threads
     )
 
     # Print summary
@@ -673,6 +687,9 @@ def main():
 
     # Save results
     save_results(results, summary, args.output)
+
+    end_time = datetime.now()
+    print(f"\n Run time: {end_time - start_time}")
 
     return 0
 
