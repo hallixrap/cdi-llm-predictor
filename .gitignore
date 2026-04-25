@@ -68,6 +68,9 @@ _ARCHIVE_OLD_FILES/
 # Context folder (may contain sensitive data)
 Context/
 
+# Meeting transcripts (may contain PII / colleague names)
+transcripts/
+
 # SQL queries folder (contains PHI data)
 SQL queries/
 
