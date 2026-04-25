@@ -230,7 +230,13 @@ def filter_already_documented(predictions: List[Dict], documented_diagnoses: Lis
 
 def predict_missed_diagnoses(discharge_summary: str, api_key: str, model: str = "gpt-4.1",
                              filter_documented: bool = True,
-                             progress_note: str = None) -> Dict:
+                             progress_note: str = None,
+                             hp_note: str = None,
+                             ed_note: str = None,
+                             progress_notes: List[str] = None,
+                             consult_notes: List[str] = None,
+                             procedure_notes: List[str] = None,
+                             ip_consult_note: str = None) -> Dict:
     """
     Predict diagnoses that CDI specialists would query about.
 
@@ -240,15 +246,64 @@ def predict_missed_diagnoses(discharge_summary: str, api_key: str, model: str = 
     Args:
         filter_documented: If True, post-filter predictions that match
             already-documented diagnoses in the discharge summary.
-        progress_note: Optional latest progress note to provide additional
-            clinical context (labs, vitals, assessments not in discharge summary).
+        progress_note: Optional single progress note (legacy, for backward compat).
+        hp_note: History & Physical note from admission.
+        ed_note: Emergency Department note.
+        progress_notes: List of up to 3 progress notes (daily physician notes).
+        consult_notes: List of up to 2 consult notes (specialist consultations).
+        procedure_notes: List of up to 2 procedure notes (operative/procedural).
+        ip_consult_note: Inpatient consult note.
     """
 
+    # Build additional clinical context from all available notes
+    additional_sections = []
+
+    if hp_note:
+        additional_sections.append(
+            "HISTORY & PHYSICAL (H&P) NOTE — admission workup, baseline labs, initial assessment:\n"
+            + hp_note
+        )
+
+    if ed_note:
+        additional_sections.append(
+            "EMERGENCY DEPARTMENT NOTE — presenting complaint, initial labs/imaging, ED course:\n"
+            + ed_note
+        )
+
+    # Progress notes (daily physician assessments — labs, vitals, clinical trajectory)
+    all_progress = []
+    if progress_notes:
+        all_progress.extend([n for n in progress_notes if n])
+    elif progress_note:
+        all_progress.append(progress_note)
+    for i, pn in enumerate(all_progress, 1):
+        additional_sections.append(
+            f"PROGRESS NOTE {i} (daily assessment — labs, vitals, clinical status):\n" + pn
+        )
+
+    if consult_notes:
+        for i, cn in enumerate([n for n in consult_notes if n], 1):
+            additional_sections.append(
+                f"CONSULT NOTE {i} (specialist consultation — findings, recommendations):\n" + cn
+            )
+
+    if procedure_notes:
+        for i, pn in enumerate([n for n in procedure_notes if n], 1):
+            additional_sections.append(
+                f"PROCEDURE NOTE {i} (operative/procedural details, findings, complications):\n" + pn
+            )
+
+    if ip_consult_note:
+        additional_sections.append(
+            "INPATIENT CONSULT NOTE (inpatient specialist assessment):\n" + ip_consult_note
+        )
+
     progress_note_section = ""
-    if progress_note:
+    if additional_sections:
         progress_note_section = (
-            "\nLATEST PROGRESS NOTE (additional clinical context — labs, vitals, assessments):\n"
-            + progress_note + "\n"
+            "\nADDITIONAL CLINICAL NOTES (use these for corroborating evidence — labs, vitals, "
+            "assessments, procedures not fully captured in the discharge summary):\n\n"
+            + "\n\n".join(additional_sections) + "\n"
         )
 
     prompt = f"""You are a Clinical Documentation Integrity (CDI) specialist at Stanford Healthcare reviewing a discharge summary.
@@ -586,6 +641,14 @@ Remember: Discharge notes are MESSY. The rules above are guidelines from .rccaut
 DISCHARGE SUMMARY TO REVIEW:
 {discharge_summary}
 {progress_note_section}
+**HOW TO USE MULTIPLE NOTES:**
+The discharge summary is the PRIMARY document — it defines what the physician chose to document. The additional notes (H&P, ED, progress, consult, procedure) provide CORROBORATING EVIDENCE that may reveal:
+- Lab values, vitals, or imaging findings not mentioned in the discharge summary
+- Treatments started or changed during the stay (antibiotics, IV fluids, blood products)
+- Specialist findings (wound staging, nutritional assessments, procedure complications)
+- Clinical trajectory (worsening labs, new diagnoses during stay)
+Cross-reference the additional notes against the discharge summary to find diagnoses that are clinically supported but UNDOCUMENTED.
+
 YOUR TASK:
 1. First, READ the Discharge Diagnoses / Problem List sections and note what is ALREADY documented
 2. Then, identify diagnoses with clinical evidence that are MISSING from that list or need specificity upgrades

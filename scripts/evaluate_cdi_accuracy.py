@@ -29,7 +29,8 @@ import argparse
 from datetime import datetime
 from typing import List, Dict, Tuple, Set
 from collections import Counter
-from cdi_llm_predictor import predict_missed_diagnoses
+from cdi_llm_predictor import predict_missed_diagnoses  # legacy
+from cdi_engine import CDIEngine  # v15 prompt + voting + precision filter
 
 # Diagnosis categories for analysis
 DIAGNOSIS_CATEGORIES = {
@@ -144,7 +145,7 @@ def diagnoses_match(pred_dx: str, true_dx: str, threshold: float = 0.5) -> bool:
         'malnutrition': ['protein calorie malnutrition', 'hypoalbuminemia', 'cachexia', 'underweight', 'severe malnutrition', 'moderate malnutrition', 'mild malnutrition'],
         'sepsis': ['severe sepsis', 'septic shock', 'urosepsis', 'septicemia'],
         'thrombocytopenia': ['pancytopenia', 'low platelets'],
-        'anemia': ['blood loss anemia', 'acute blood loss anemia', 'iron deficiency anemia', 'chronic anemia', 'normocytic anemia'],
+        'anemia': ['blood loss anemia', 'acute blood loss anemia', 'iron deficiency anemia', 'chronic anemia', 'normocytic anemia', 'posthemorrhagic anemia'],
         'respiratory failure': ['hypoxic respiratory failure', 'acute respiratory failure', 'hypoxia', 'hypercapnic', 'hypercapnia'],
         'heart failure': ['chf', 'congestive heart failure', 'systolic heart failure', 'diastolic heart failure',
                           'acute on chronic heart failure', 'hfref', 'hfpef', 'pulmonary edema'],
@@ -159,6 +160,37 @@ def diagnoses_match(pred_dx: str, true_dx: str, threshold: float = 0.5) -> bool:
         'debridement': ['excisional debridement', 'surgical debridement', 'wound debridement'],
         'quadriplegia': ['functional quadriplegia', 'tetraplegia', 'paralysis'],
         'pulmonary edema': ['acute pulmonary edema', 'cardiogenic pulmonary edema', 'non cardiogenic pulmonary edema', 'flash pulmonary edema'],
+        # UTI variants — CDI queries say "UTI" but model may say "cystitis", "pyelonephritis", etc.
+        'urinary tract infection': ['uti', 'cystitis', 'acute cystitis', 'pyelonephritis',
+                                     'catheter associated urinary tract infection', 'cauti',
+                                     'complicated uti', 'urosepsis'],
+        # Demand ischemia / Type 2 MI — same clinical entity, different naming conventions
+        'demand ischemia': ['type 2 myocardial infarction', 'type 2 mi', 'type ii mi',
+                            'type ii myocardial infarction', 'nstemi type 2', 'demand mi'],
+        # DVT/PE variants
+        'deep vein thrombosis': ['dvt', 'deep venous thrombosis', 'venous thromboembolism', 'vte'],
+        'pulmonary embolism': ['pe', 'pulmonary thromboembolism'],
+        # Pleural effusion variants
+        'pleural effusion': ['malignant pleural effusion', 'parapneumonic effusion', 'empyema'],
+        # Pneumonia variants
+        'pneumonia': ['aspiration pneumonia', 'aspiration pneumonitis', 'hospital acquired pneumonia',
+                      'ventilator associated pneumonia', 'hap', 'vap', 'cap',
+                      'community acquired pneumonia'],
+        # Afib variants
+        'atrial fibrillation': ['afib', 'a fib', 'paroxysmal atrial fibrillation',
+                                'persistent atrial fibrillation', 'rvr', 'rapid ventricular response'],
+        # Diabetes specificity
+        'diabetes': ['diabetes mellitus', 'type 2 diabetes', 'type 1 diabetes', 'dm2', 'dm1',
+                     'diabetic ketoacidosis', 'dka', 'hhs', 'hyperosmolar'],
+        # Wound/skin
+        'wound': ['surgical wound', 'wound dehiscence', 'surgical site infection', 'ssi'],
+        # C. diff
+        'clostridioides difficile': ['c diff', 'c difficile', 'cdiff', 'clostridium difficile',
+                                      'pseudomembranous colitis'],
+        # Dehydration
+        'dehydration': ['hypovolemia', 'volume depletion'],
+        # Pericardial effusion
+        'pericardial effusion': ['malignant pericardial effusion', 'cardiac tamponade'],
     }
 
     for base_term, equivalent_terms in clinical_equivalents.items():
@@ -189,9 +221,17 @@ def diagnoses_match(pred_dx: str, true_dx: str, threshold: float = 0.5) -> bool:
 
 
 def evaluate_single_case(discharge_summary: str, true_diagnoses: List[str],
-                         api_key: str, case_id: str, model: str = "gpt-4.1",
+                         api_key: str, case_id: str, model: str = "gpt-5",
                          verbose: bool = False, use_llm_judge: bool = False,
-                         llm_matcher=None, progress_note: str = None) -> Dict:
+                         llm_matcher=None, progress_note: str = None,
+                         hp_note: str = None, ed_note: str = None,
+                         progress_notes: List[str] = None,
+                         consult_notes: List[str] = None,
+                         procedure_notes: List[str] = None,
+                         ip_consult_note: str = None,
+                         use_engine: bool = True,
+                         engine: 'CDIEngine' = None,
+                         engine_mode: str = "balanced") -> Dict:
     """
     Evaluate LLM predictor on a single case.
 
@@ -204,7 +244,17 @@ def evaluate_single_case(discharge_summary: str, true_diagnoses: List[str],
         verbose: Print debug info
         use_llm_judge: Use LLM-based semantic matching (slower but more accurate)
         llm_matcher: Pre-initialized HybridMatcher instance (to share cache)
-        progress_note: Optional progress note for additional clinical context
+        progress_note: Optional single progress note (legacy compat)
+        hp_note: History & Physical note
+        ed_note: Emergency Department note
+        progress_notes: List of progress notes
+        consult_notes: List of consult notes
+        procedure_notes: List of procedure notes
+        ip_consult_note: Inpatient consult note
+        use_engine: If True (default), use CDIEngine (v15 prompt + voting + precision filter).
+                    If False, use legacy cdi_llm_predictor.
+        engine: Pre-initialised CDIEngine instance (shared across cases to avoid re-init).
+        engine_mode: CDIEngine mode — "fast", "balanced", or "high_recall".
     """
 
     if verbose:
@@ -212,14 +262,39 @@ def evaluate_single_case(discharge_summary: str, true_diagnoses: List[str],
         print(f"CDI queried about: {', '.join(true_diagnoses)}")
 
     try:
-        # Call LLM predictor
-        result = predict_missed_diagnoses(discharge_summary, api_key, model=model,
-                                          progress_note=progress_note)
-
-        # Extract predicted diagnoses
-        missed = result.get('missed_diagnoses', [])
-        pred_diagnoses = [dx.get('diagnosis', '') for dx in missed]
-        pred_categories = [dx.get('category', '') for dx in missed]
+        if use_engine:
+            # Use CDIEngine (v15 prompt + self-consistency voting + 90% precision filter)
+            if engine is None:
+                engine = CDIEngine(api_key=api_key, model=model)
+            result = engine.analyse(
+                discharge_summary=discharge_summary,
+                progress_note=progress_note,
+                hp_note=hp_note,
+                ed_note=ed_note,
+                progress_notes=progress_notes,
+                consult_notes=consult_notes,
+                procedure_notes=procedure_notes,
+                ip_consult_note=ip_consult_note,
+                mode=engine_mode,
+            )
+            # CDIEngine returns predictions in result['predictions']
+            preds = result.get('predictions', [])
+            pred_diagnoses = [dx.get('diagnosis', '') for dx in preds]
+            pred_categories = [dx.get('category', '') for dx in preds]
+        else:
+            # Legacy: use cdi_llm_predictor (old 22-pattern prompt, no voting)
+            result = predict_missed_diagnoses(discharge_summary, api_key, model=model,
+                                              progress_note=progress_note,
+                                              hp_note=hp_note,
+                                              ed_note=ed_note,
+                                              progress_notes=progress_notes,
+                                              consult_notes=consult_notes,
+                                              procedure_notes=procedure_notes,
+                                              ip_consult_note=ip_consult_note)
+            # Legacy predictor returns missed_diagnoses
+            missed = result.get('missed_diagnoses', [])
+            pred_diagnoses = [dx.get('diagnosis', '') for dx in missed]
+            pred_categories = [dx.get('category', '') for dx in missed]
 
         if verbose:
             print(f"LLM predicted {len(pred_diagnoses)} diagnoses")
@@ -285,9 +360,12 @@ def evaluate_single_case(discharge_summary: str, true_diagnoses: List[str],
         }
 
 
-def run_evaluation(df: pd.DataFrame, api_key: str, model: str = "gpt-4.1",
+def run_evaluation(df: pd.DataFrame, api_key: str, model: str = "gpt-5",
                    limit: int = None, verbose: bool = False,
-                   use_llm_judge: bool = False, judge_model: str = "gpt-5-nano") -> Tuple[List[Dict], Dict]:
+                   use_llm_judge: bool = False, judge_model: str = "gpt-5-nano",
+                   use_engine: bool = True,
+                   engine_mode: str = "balanced",
+                   discharge_only: bool = False) -> Tuple[List[Dict], Dict]:
     """
     Run full evaluation on dataset.
 
@@ -299,6 +377,8 @@ def run_evaluation(df: pd.DataFrame, api_key: str, model: str = "gpt-4.1",
         verbose: Print debug info
         use_llm_judge: Use LLM-as-judge for semantic matching
         judge_model: Model to use for LLM judge
+        use_engine: If True (default), use CDIEngine (v15 prompt + voting + precision filter).
+        engine_mode: CDIEngine mode — "fast", "balanced", or "high_recall".
     """
 
     print(f"\n{'='*80}")
@@ -308,6 +388,13 @@ def run_evaluation(df: pd.DataFrame, api_key: str, model: str = "gpt-4.1",
         print(f"LLM Judge: {judge_model}")
     print(f"Dataset size: {len(df)} cases")
     print(f"{'='*80}")
+
+    # Initialize CDIEngine (shared across all cases)
+    engine = None
+    if use_engine:
+        engine = CDIEngine(api_key=api_key, model=model)
+        print(f"CDIEngine: v15 prompt + {engine_mode} mode" +
+              (" (self-consistency voting)" if engine_mode != "fast" else ""))
 
     # Initialize LLM matcher if using LLM judge
     llm_matcher = None
@@ -380,13 +467,60 @@ def run_evaluation(df: pd.DataFrame, api_key: str, model: str = "gpt-4.1",
         if not true_diagnoses:
             continue
 
-        # Get progress note if available
-        progress_note = None
-        if 'progress_note' in row and pd.notna(row.get('progress_note')):
-            progress_note = row['progress_note']
+        # Get all available clinical notes from expanded dataset
+        def get_note(col):
+            """Safely extract a note column, returning None if missing/empty."""
+            if col in row and pd.notna(row.get(col)):
+                val = str(row[col]).strip()
+                return val if val and val.lower() != 'nan' else None
+            return None
 
-        print(f"Processing {idx+1}/{len(df)}: {case_id} ({len(true_diagnoses)} CDI queries)" +
-              (" [+progress note]" if progress_note else ""))
+        # Legacy single progress note (old dataset format)
+        progress_note = None if discharge_only else get_note('progress_note')
+
+        # Expanded note types (new dataset: cdi_expanded_notes.csv)
+        # Suppressed entirely in discharge_only mode for apples-to-apples baseline.
+        hp_note = None if discharge_only else get_note('hp_note')
+        ed_note = None if discharge_only else get_note('ed_note')
+        ip_consult_note = None if discharge_only else get_note('ip_consult_note')
+
+        if discharge_only:
+            progress_notes = []
+            consult_notes = []
+            procedure_notes = []
+        else:
+            # Collect multiple progress notes
+            progress_notes = [n for n in [
+                get_note('progress_note_1'),
+                get_note('progress_note_2'),
+                get_note('progress_note_3'),
+            ] if n]
+
+            # Collect consult notes
+            consult_notes = [n for n in [
+                get_note('consult_note_1'),
+                get_note('consult_note_2'),
+            ] if n]
+
+            # Collect procedure notes
+            procedure_notes = [n for n in [
+                get_note('procedure_note_1'),
+                get_note('procedure_note_2'),
+            ] if n]
+
+        # Count additional notes for logging
+        extra_note_count = sum([
+            1 if hp_note else 0,
+            1 if ed_note else 0,
+            len(progress_notes),
+            len(consult_notes),
+            len(procedure_notes),
+            1 if ip_consult_note else 0,
+        ])
+        note_label = f" [+{extra_note_count} notes]" if extra_note_count > 0 else (
+            " [+progress note]" if progress_note else "")
+
+        print(f"Processing {idx+1}/{len(df)}: {case_id} ({len(true_diagnoses)} CDI queries){note_label}")
 
         result = evaluate_single_case(
             discharge_summary=discharge_summary,
@@ -397,7 +531,16 @@ def run_evaluation(df: pd.DataFrame, api_key: str, model: str = "gpt-4.1",
             verbose=verbose,
             use_llm_judge=use_llm_judge,
             llm_matcher=llm_matcher,
-            progress_note=progress_note
+            progress_note=progress_note,
+            hp_note=hp_note,
+            ed_note=ed_note,
+            progress_notes=progress_notes if progress_notes else None,
+            consult_notes=consult_notes if consult_notes else None,
+            procedure_notes=procedure_notes if procedure_notes else None,
+            ip_consult_note=ip_consult_note,
+            use_engine=use_engine,
+            engine=engine,
+            engine_mode=engine_mode,
         )
         results.append(result)
 
@@ -459,6 +602,10 @@ def run_evaluation(df: pd.DataFrame, api_key: str, model: str = "gpt-4.1",
         'category_stats': dict(category_stats),
         'category_matched': dict(category_matched),
         'model': model,
+        'use_engine': use_engine,
+        'engine_mode': engine_mode if use_engine else None,
+        'discharge_only': discharge_only,
+        'prompt_variant': 'v15_cdi_agent_style' if use_engine else 'legacy_22_pattern',
         'use_llm_judge': use_llm_judge,
         'judge_model': judge_model if use_llm_judge else None,
         'llm_judge_stats': llm_judge_stats,
@@ -586,7 +733,7 @@ def main():
                         help='Path to evaluation dataset')
     parser.add_argument('--sample', type=int, default=None,
                         help='Randomly sample N cases (use instead of --limit for unbiased eval)')
-    parser.add_argument('--model', type=str, default='gpt-4.1',
+    parser.add_argument('--model', type=str, default='gpt-5',
                         choices=['gpt-4.1', 'gpt-5', 'gpt-5-nano', 'gpt-4.1-mini', 'claude-opus-4', 'claude-sonnet-4'],
                         help='LLM model to use')
     parser.add_argument('--limit', type=int, default=None,
@@ -602,8 +749,20 @@ def main():
     parser.add_argument('--judge-model', type=str, default='gpt-5-nano',
                         choices=['gpt-5-nano', 'gpt-4.1-mini'],
                         help='Model to use for LLM judge (default: gpt-5-nano)')
+    parser.add_argument('--use-engine', action='store_true', default=True,
+                        help='Use CDIEngine with v15 prompt + precision filter (default: True)')
+    parser.add_argument('--no-engine', action='store_true',
+                        help='Disable CDIEngine, use legacy predictor instead')
+    parser.add_argument('--engine-mode', type=str, default='fast',
+                        choices=['fast', 'balanced', 'high_recall'],
+                        help='CDIEngine mode: fast (1 call), balanced (3-vote), high_recall (default: fast)')
+    parser.add_argument('--discharge-only', action='store_true',
+                        help='Use only the discharge summary, suppress all expanded note types '
+                             '(for apples-to-apples baseline comparison)')
 
     args = parser.parse_args()
+    if args.no_engine:
+        args.use_engine = False
 
     # Get API key
     api_key = os.environ.get('STANFORD_API_KEY')
@@ -665,7 +824,10 @@ def main():
         limit=limit,
         verbose=args.verbose,
         use_llm_judge=args.llm_judge,
-        judge_model=args.judge_model
+        judge_model=args.judge_model,
+        use_engine=args.use_engine,
+        engine_mode=args.engine_mode,
+        discharge_only=args.discharge_only
     )
 
     # Print summary
