@@ -1,0 +1,133 @@
+==============================================================================
+CDI PREDICTOR HILL-CLIMBING EVALUATOR - QUICK START
+==============================================================================
+
+WHAT IS THIS?
+  A Karpathy-inspired autonomous optimization loop that tests prompt 
+  modifications and keeps improvements. Designed to run for hours.
+
+QUICK START (2 MINUTES)
+  
+  1. Get your Stanford API key
+  
+  2. Run:
+     cd /sessions/eloquent-wizardly-heisenberg/mnt/New_CDI
+     python scripts/hill_climb_eval.py --api-key YOUR_KEY
+  
+  3. Monitor:
+     tail -f results/hill_climb_results.tsv
+  
+  4. Wait for completion (~30-45 minutes)
+
+FILES
+  Main script:     scripts/hill_climb_eval.py (696 lines)
+  User guide:      HILL_CLIMB_USAGE.md
+  Architecture:    HILL_CLIMB_ARCHITECTURE.md
+  Examples:        EXAMPLE_HILL_CLIMB_RUN.sh
+  This file:       HILL_CLIMB_QUICK_START.txt
+
+HOW IT WORKS
+  
+  [Load dataset] -> [Baseline evaluation] -> [Hill-climbing loop]
+                                            |
+                                            +-> Try strategy 1
+                                            +-> Recall improved? KEEP : DISCARD
+                                            +-> Try strategy 2
+                                            +-> ...repeat...
+                                            |
+  [Save best config & results]
+
+KEY CONCEPTS
+  - Optimizes RECALL (% of missed diagnoses found)
+  - Uses same 30 cases each iteration (fair comparison)
+  - 8 modification strategies tested in sequence
+  - Binary decision: improve=keep, degrade=discard
+  - Greedy hill-climbing (simple but effective)
+
+EXAMPLE RUNS
+
+  Quick test (15 min):
+  $ python scripts/hill_climb_eval.py --api-key KEY \
+      --model gpt-4.1-mini --sample-size 10 --max-iterations 5
+
+  Standard run (45 min):
+  $ python scripts/hill_climb_eval.py --api-key KEY
+
+  Production run (2 hours):
+  $ python scripts/hill_climb_eval.py --api-key KEY \
+      --sample-size 50 --max-iterations 30
+
+RESULTS
+  
+  After completion, find:
+  - results/hill_climb_results.tsv  (tab-separated results per iteration)
+  - results/hill_climb_checkpoint.json  (best config & metrics)
+
+INTERPRETING RESULTS
+  
+  TSV columns:
+    iteration - Iteration number (0=baseline)
+    recall - Recall metric (0.0-1.0)
+    precision - Precision metric (0.0-1.0)  
+    matched - Number of matched diagnoses
+    status - baseline|keep|discard
+    description - Strategy applied
+    timestamp - When it ran
+
+  Interpret:
+    - High-performing iterations show status='keep'
+    - Check recall progression to see improvement
+    - Final recall in last 'keep' row is best achieved
+
+8 MODIFICATION STRATEGIES (tested in order)
+  
+  1. Two-pass mode - Identify, then verify
+  2. Extraction detail - Concise vs verbose prompts
+  3. Category prompts - Specialized for sepsis, respiratory, etc.
+  4. Prompt structure - System message vs inline
+  5. Temperature - Creative vs conservative sampling
+  6. Few-shot examples - Add high-performing examples
+  7. Output format - JSON vs text
+  8. Verification step - Double-check findings
+
+TROUBLESHOOTING
+
+  "API Error 401"
+    -> API key expired or incorrect
+    -> Check VPN connection to Stanford
+    -> Contact Fateme Nateghi for new key
+
+  "No improvement after iterations"
+    -> Dataset may be too hard
+    -> Try larger sample size
+    -> Check if strategies need tuning
+
+  "Slow evaluation"
+    -> Use gpt-4.1-mini (faster than gpt-5)
+    -> Reduce sample-size
+    -> Check internet connection
+
+NEXT STEPS (after completion)
+
+  1. Review results/hill_climb_results.tsv
+  2. Identify which strategies improved recall
+  3. Update cdi_llm_predictor.py with best_config modifications
+  4. Run evaluate_cdi_accuracy.py on full dataset
+  5. Compare models with compare_models.py
+  6. Deploy improved version to web demo
+
+TIPS
+
+  - Use `tail -f results/hill_climb_results.tsv` to watch progress
+  - Typical improvement: 15-30% over baseline
+  - First 5 iterations often show biggest gains
+  - Run in background with: nohup python ... > hill_climb.log 2>&1 &
+  - Checkpoints saved after each iteration (resumable)
+
+CONTACT
+  Questions? Check:
+  - HILL_CLIMB_USAGE.md (detailed user guide)
+  - HILL_CLIMB_ARCHITECTURE.md (design & concepts)
+  - Code comments in hill_climb_eval.py
+
+==============================================================================
