@@ -33,19 +33,31 @@ from cdi_llm_predictor import predict_missed_diagnoses  # legacy
 from cdi_engine import CDIEngine  # v15 prompt + voting + precision filter
 
 # Diagnosis categories for analysis
+# Phase C.1 (2026-04-25): expanded keyword sets so HFrEF/HFpEF, AF variants,
+# CKD, DKA/HHS/metabolic acidosis-alkalosis, sarcopenia, and plural
+# "pressure injuries" route to the correct buckets instead of "other".
 DIAGNOSIS_CATEGORIES = {
     'electrolytes': ['hyponatremia', 'hypernatremia', 'hypokalemia', 'hyperkalemia',
                      'hypocalcemia', 'hypercalcemia', 'hypomagnesemia', 'hypophosphatemia',
                      'hyperphosphatemia'],
     'anemia': ['anemia', 'blood loss', 'iron deficiency', 'hemoglobin'],
-    'malnutrition': ['malnutrition', 'protein calorie', 'underweight', 'cachexia', 'bmi'],
+    'malnutrition': ['malnutrition', 'protein calorie', 'underweight', 'cachexia', 'bmi',
+                     'sarcopenia'],
     'sepsis': ['sepsis', 'septic'],
     'respiratory': ['respiratory failure', 'hypoxic', 'hypoxia', 'pulmonary edema'],
-    'cardiac': ['heart failure', 'chf', 'myocardial infarction', 'mi', 'demand ischemia'],
-    'renal': ['acute kidney injury', 'aki', 'renal failure'],
-    'pressure_ulcer': ['pressure ulcer', 'decubitus', 'pressure injury'],
+    'cardiac': ['heart failure', 'chf', 'myocardial infarction', 'mi', 'demand ischemia',
+                'hfref', 'hfpef', 'hf ref', 'hf pef', 'systolic hf', 'diastolic hf',
+                'systolic heart failure', 'diastolic heart failure', 'combined hf',
+                'ejection fraction', 'reduced ef', 'preserved ef',
+                'atrial fibrillation', 'afib', 'a fib', 'a-fib',
+                'av block', 'fascicular block', 'arrhythmia'],
+    'renal': ['acute kidney injury', 'aki', 'renal failure',
+              'ckd', 'chronic kidney', 'chronic kidney disease'],
+    'pressure_ulcer': ['pressure ulcer', 'decubitus', 'pressure injury', 'pressure injuries'],
     'coagulation': ['thrombocytopenia', 'pancytopenia', 'coagulopathy'],
-    'metabolic': ['lactic acidosis', 'hyperglycemia', 'hypoglycemia', 'encephalopathy'],
+    'metabolic': ['lactic acidosis', 'hyperglycemia', 'hypoglycemia', 'encephalopathy',
+                  'metabolic acidosis', 'metabolic alkalosis',
+                  'dka', 'diabetic ketoacidosis', 'hhs', 'hyperosmolar'],
     'hypoalbuminemia': ['hypoalbuminemia', 'albumin'],
     'other': []  # Catch-all
 }
