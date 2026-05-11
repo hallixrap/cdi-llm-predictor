@@ -4,20 +4,28 @@
 
 CDI (Clinical Documentation Improvement) diagnosis prediction system. Proactively identifies high-value diagnoses that physicians commonly miss in discharge summaries using GPT-5, a multi-note clinical pipeline, and LLM-as-Judge evaluation. Based on 688 actual CDI queries from Stanford Healthcare. Target: 20% reduction in manual CDI queries.
 
-## Current Status (2026-04-22)
+## Current Status (2026-05-08)
 
-- **Dataset**: 1086 evaluation cases (expanded from the original 552), drawn from Stanford CDI queries
-- **Recall**: 58.1% overall (locked 1086-case eval, 17 Apr — soft Phase D + multi-note + filter bypass)
-- **Precision**: 53.0% LEGITIMATE_CDI on the latest LLM precision-judge run (300-sample, seed=42)
-  - LEGITIMATE_CDI 53.0 / PARTIALLY_VALID 24.2 / ALREADY_CODED 12.4 / HALLUCINATION 10.4
-- **Category recall** (current, softened Phase D):
-  - Sepsis 77.6%, Respiratory ~77%, Anemia ~73%, Malnutrition 68.9%
-  - Metabolic still weak (+0.5pp only from Phase D softening — candidate for Phase C.3)
-  - "Other" bucket is the largest remaining recall lever (347 ground-truth queries)
-- **Architecture**: `CDIEngine` (fast/balanced/high_recall modes) is now the primary pipeline. Legacy `cdi_llm_predictor.py` retained as fallback via `--no-engine`.
-- **Multi-note pipeline**: 11 note types supported (discharge, H&P, ED, 3× progress, 2× consult, 2× procedure, IP consult)
-- **Already-documented filter**: BYPASSED since 17 Apr — LLM judge showed it was suppressing legitimate queries for marginal precision gain. Extraction retained for summary stats; filter call commented out in `cdi_engine.py`.
-- **Prompt**: v15 CDI-agent-style with softened Phase D wording that protects discharge A&P / nutrition / problem-list content while still directing attention to cross-note gaps.
+- **Dataset**: 1086 evaluation cases — file is `data/cdi_expanded_notes_eval.csv` with 11 note types per case (discharge, H&P, ED, 3× progress, 2× consult, 2× procedure, IP consult). Always pass `--data data/cdi_expanded_notes_eval.csv` explicitly; the silent fall-through to `cdi_linked_discharge_cleaned_confirmed_only.csv` (1009 single-note cases) caused a methodologically unsound paired comparison on 28 Apr.
+- **Recall reference**: 22 Apr fast-mode run on 1086-case multi-note set: **58.07%** overall. Treat this as the locked baseline for paired comparisons of new experiments.
+- **Precision reference**: 53.0% LEGITIMATE_CDI on the 300-sample seed=42 precision judge from 22 Apr.
+- **Already-documented filter**: RESTORED on 1 May after Phase C regression analysis showed it's load-bearing for prompt-recall-surface expansions. Without it, "always query X" prompt rules inflate ALREADY_CODED.
+- **Gateway**: Migrated 8 May 2026 from `apim.stanfordhealthcare.org` (deprecated) to `aihubapi.stanfordhealthcare.org` (Stanford SecureGPT AI Hub). New auth header is **`api-key`** (NOT `Ocp-Apim-Subscription-Key`). Standard Product subscription covers both Azure AI Foundry (GPT-5/4.1 family) and AWS Bedrock (Claude family) under one key. BAA-covered for PHI/PII.
+- **Models available** on Stanford gateway: full GPT-5 family including `gpt-5-4` (≈ "GPT-5.5"), Claude Opus/Sonnet/Haiku 4.x via Bedrock — including target model `claude-opus-4-7`.
+
+## Active Experiment Track (Stage 2 paired comparison, planned)
+
+Five experiments scoped on the same 30-case stratified subset of the 1086 cases. Stage 3 hill-climbs only on whichever wins.
+
+| # | Architecture | Model | Status |
+|---|---|---|---|
+| 1 | `CDIEngine` (current) — v15 prompt + balanced voting + filter | gpt-5 | Baseline |
+| 2 | `CDIEngine` | gpt-5-4 | Smoke-tested 8 May (3-case 100% recall) |
+| 3 | `CDIEngine` (Bedrock route) | claude-opus-4-7 | Smoke-tested 8 May (Bedrock connectivity confirmed) |
+| 4 | `CDIAgentRunner` — agentic tool-use loop with format-validation hook | claude-opus-4-7 | Built 8 May, awaiting smoke test |
+| 5 | `CDIEngine` + Phase E pathology-scan pass | TBD | Designed (`PHASE_E_PATHOLOGY_DESIGN.md`), deferred |
+
+The agentic runner replicates the Anthropic-built `cdi-agent` shape (multi-turn tool use, structured `report_diagnoses` tool, ICD-10 format-validation step) on Stanford's PHI-safe Bedrock endpoint — not via the Claude Agent SDK (which requires `api.anthropic.com`), but via a custom loop on top of `_call_bedrock` in `cdi_engine.py`.
 
 ## What Needs Doing Next
 
@@ -47,9 +55,10 @@ Epic integration, clinical validation, pilot.
 
 ## Key Scripts
 
-- `scripts/cdi_engine.py` — **Primary** CDIEngine (fast/balanced/high_recall modes, multi-note support)
+- `scripts/cdi_engine.py` — **Primary** CDIEngine (fast/balanced/high_recall modes, multi-note support, OpenAI + Bedrock dispatch)
+- `scripts/cdi_agent_runner.py` — **Experimental** agentic runner replicating the Anthropic-built cdi-agent on Stanford Bedrock (Claude-only)
 - `scripts/cdi_llm_predictor.py` — Legacy LLM predictor (GPT-5). Retained as `--no-engine` fallback.
-- `scripts/evaluate_cdi_accuracy.py` — Evaluation framework (supports `--engine-mode`, `--discharge-only`, `--prompt-variant`)
+- `scripts/evaluate_cdi_accuracy.py` — Evaluation framework. Flags: `--use-engine` (default), `--use-agent`, `--engine-mode`, `--discharge-only`, `--model`
 - `scripts/llm_judge.py` — LLM-as-Judge semantic matching (for recall scoring)
 - `scripts/llm_precision_judge.py` — Precision judge (4 buckets: LEGITIMATE_CDI / ALREADY_CODED / PARTIALLY_VALID / HALLUCINATION)
 - `scripts/hill_climb_eval.py`, `scripts/run_hill_climb.py` — Paired hill-climb optimisation framework (23 prompt variants tested)

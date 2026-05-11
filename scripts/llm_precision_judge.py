@@ -197,13 +197,58 @@ def sample_unmatched_predictions(results_df, data_df, n_sample: int, seed: int =
     return picked
 
 
+def load_eval_metadata(results_csv: str) -> dict:
+    """Load the eval summary JSON that accompanies a results CSV.
+
+    The evaluator saves both alongside each other:
+        results/cdi_evaluation_results_<ts>.csv
+        results/cdi_evaluation_summary_<ts>.json
+    so we can recover what model/architecture was being evaluated.
+    Returns {} if the summary can't be found.
+    """
+    p = Path(results_csv)
+    # cdi_evaluation_results_<ts>.csv → cdi_evaluation_summary_<ts>.json
+    summary_name = p.name.replace(
+        "cdi_evaluation_results_", "cdi_evaluation_summary_"
+    ).replace(".csv", ".json")
+    summary_path = p.parent / summary_name
+    if not summary_path.exists():
+        return {}
+    try:
+        with open(summary_path) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def describe_architecture(meta: dict) -> str:
+    """One-line description of which pipeline produced the evaluated CSV."""
+    if not meta:
+        return "unknown architecture"
+    use_engine = meta.get("use_engine", False)
+    mode = meta.get("engine_mode")
+    # The evaluator sets use_engine=False internally when use_agent is True,
+    # and writes mode=None in that case. Use that combination to detect agent.
+    if use_engine is False and (mode is None or mode == "None"):
+        return "CDIAgentRunner (agentic loop)"
+    if use_engine and mode:
+        return f"CDIEngine ({mode} mode)"
+    if use_engine:
+        return "CDIEngine"
+    return "legacy cdi_llm_predictor"
+
+
 def main():
     parser = argparse.ArgumentParser(description="LLM-as-judge precision evaluator")
     parser.add_argument("--results", required=True, help="Path to evaluation results CSV")
     parser.add_argument("--data", default="data/cdi_expanded_notes_eval.csv",
                         help="Path to evaluation dataset with notes")
     parser.add_argument("--sample", type=int, default=300, help="Number of predictions to grade")
-    parser.add_argument("--judge-model", default="gpt-5", help="Model to use as judge")
+    parser.add_argument("--judge-model", default="gpt-5",
+                        help=("Model to use as judge. Examples: gpt-5 (default), "
+                              "gpt-5-4, gpt-5-nano, claude-opus-4-7, claude-sonnet-4-6. "
+                              "Use a different family from the evaluated config to "
+                              "minimise self-evaluation bias."))
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output-dir", default="results", help="Where to write judge output")
     parser.add_argument("--resume", action="store_true", help="Resume from checkpoint if present")
@@ -214,7 +259,20 @@ def main():
         print("ERROR: STANFORD_API_KEY not set")
         return 1
 
-    print(f"Loading results: {args.results}")
+    # Identify what we're judging upfront so the report header is unambiguous
+    eval_meta = load_eval_metadata(args.results)
+    evaluated_model = eval_meta.get("model", "?")
+    architecture = describe_architecture(eval_meta)
+    evaluated_recall = eval_meta.get("overall_recall")
+
+    print(f"\nLoading results: {args.results}")
+    print(f"  Evaluated config: {evaluated_model} via {architecture}")
+    if evaluated_recall is not None:
+        print(f"  Eval-reported recall: {evaluated_recall * 100:.1f}%")
+    print(f"  Judge model: {args.judge_model}")
+    if args.judge_model == evaluated_model:
+        print(f"  WARNING: judge model matches evaluated model — "
+              f"results may be inflated by self-evaluation bias.")
     results = pd.read_csv(args.results)
     print(f"Loaded {len(results)} case results")
 
@@ -303,19 +361,29 @@ def main():
     print("\n" + "=" * 60)
     print("LLM-AS-JUDGE PRECISION REPORT")
     print("=" * 60)
-    print(f"Sample size: {len(graded)} (valid: {valid_total}, errors: {tally.get('ERROR', 0)})")
+    print(f"Evaluated config: {evaluated_model} via {architecture}")
+    if evaluated_recall is not None:
+        print(f"Eval-reported recall: {evaluated_recall * 100:.1f}%")
     print(f"Judge model: {args.judge_model}")
+    if args.judge_model == evaluated_model:
+        print(f"⚠️  Self-evaluation: judge and evaluated model are the same.")
+    print(f"Sample size: {len(graded)} (valid: {valid_total}, errors: {tally.get('ERROR', 0)})")
     print()
     for v in ["LEGITIMATE_CDI", "ALREADY_CODED", "PARTIALLY_VALID", "HALLUCINATION"]:
         n = tally.get(v, 0)
         pct = n / valid_total * 100 if valid_total else 0
         print(f"  {v:<20}{n:>5} ({pct:>5.1f}%)")
 
-    # Save final JSON
+    # Save final JSON — include eval metadata so future runs can never be
+    # confused about which config was being judged.
     out_obj = {
         "timestamp": ts,
         "results_csv": args.results,
         "judge_model": args.judge_model,
+        "evaluated_model": evaluated_model,
+        "evaluated_architecture": architecture,
+        "evaluated_recall": evaluated_recall,
+        "self_evaluation": args.judge_model == evaluated_model,
         "sample_size": len(graded),
         "tally": dict(tally),
         "graded": graded,

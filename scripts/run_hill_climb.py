@@ -34,20 +34,30 @@ from pathlib import Path
 # STANFORD API CALLER (with robust retry)
 # ===========================================================================
 
+# Migrated 8 May 2026 from apim.stanfordhealthcare.org → aihubapi.stanfordhealthcare.org
+# New SecureGPT AI Hub gateway with BAA coverage. Auth header is "api-key".
 API_ENDPOINTS = {
-    "gpt-5": "https://apim.stanfordhealthcare.org/openai-eastus2/deployments/gpt-5/chat/completions?api-version=2024-12-01-preview",
-    "gpt-4.1": "https://apim.stanfordhealthcare.org/openai-eastus2/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
-    "gpt-5-nano": "https://apim.stanfordhealthcare.org/openai-eastus2/deployments/gpt-5-nano/chat/completions?api-version=2024-12-01-preview",
+    "gpt-5": "https://aihubapi.stanfordhealthcare.org/azure-openai/deployments/gpt-5/chat/completions?api-version=2024-12-01-preview",
+    "gpt-5-1": "https://aihubapi.stanfordhealthcare.org/azure-openai/deployments/gpt-5-1/chat/completions?api-version=2024-12-01-preview",
+    "gpt-5-2": "https://aihubapi.stanfordhealthcare.org/azure-openai/deployments/gpt-5-2/chat/completions?api-version=2024-12-01-preview",
+    "gpt-5-4": "https://aihubapi.stanfordhealthcare.org/azure-openai/deployments/gpt-5-4/chat/completions?api-version=2024-12-01-preview",
+    "gpt-5-mini": "https://aihubapi.stanfordhealthcare.org/azure-openai/deployments/gpt-5-mini/chat/completions?api-version=2024-12-01-preview",
+    "gpt-5-nano": "https://aihubapi.stanfordhealthcare.org/azure-openai/deployments/gpt-5-nano/chat/completions?api-version=2024-12-01-preview",
+    "gpt-5-4-mini": "https://aihubapi.stanfordhealthcare.org/azure-openai/deployments/gpt-5-4-mini/chat/completions?api-version=2024-12-01-preview",
+    "gpt-4.1": "https://aihubapi.stanfordhealthcare.org/azure-openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
+    "gpt-4.1-mini": "https://aihubapi.stanfordhealthcare.org/azure-openai/deployments/gpt-4.1-mini/chat/completions?api-version=2025-01-01-preview",
+    "gpt-4.1-nano": "https://aihubapi.stanfordhealthcare.org/azure-openai/deployments/gpt-4.1-nano/chat/completions?api-version=2025-01-01-preview",
 }
 
+
 def call_llm(messages, api_key, model="gpt-5", temperature=0.2, max_tokens=16000):
-    """Call Stanford LLM with robust retry logic.
-    Matches the exact format used in cdi_llm_predictor.py which is known to work.
+    """Call Stanford LLM with robust retry logic via the AI Hub gateway.
+    Auth header is "api-key" (NOT the old "Ocp-Apim-Subscription-Key").
     """
     url = API_ENDPOINTS.get(model, API_ENDPOINTS["gpt-5"])
     headers = {
         "Content-Type": "application/json",
-        "Ocp-Apim-Subscription-Key": api_key,
+        "api-key": api_key,
     }
 
     # GPT-5 has specific API requirements — no custom temperature, uses max_completion_tokens
@@ -778,6 +788,52 @@ def extract_diagnoses_from_query(cdi_diagnoses_str: str) -> List[str]:
     return [text] if text else []
 
 
+def extract_diagnoses_from_query_text(query_text: str) -> List[str]:
+    """Parse raw CDI query text (the cdi_expanded_notes_eval.csv format).
+
+    Mirrors evaluate_cdi_accuracy.extract_cdi_diagnosis_from_query — handles
+    [X] markers, "clinically valid" phrasing, and "indicated below" sections.
+    Used when the dataset doesn't have a pre-parsed cdi_diagnoses_confirmed
+    column.
+    """
+    import re as _re
+    if pd.isna(query_text) or not isinstance(query_text, str):
+        return []
+
+    diagnoses = []
+    pat = r'\[\s*[Xx]\s*\]\s*([^\n\[\]]+)'
+    diagnoses.extend(m.strip() for m in _re.findall(pat, query_text) if m.strip())
+
+    if 'clinically valid' in query_text.lower():
+        parts = _re.split(r'clinically valid\.?', query_text, flags=_re.IGNORECASE)
+        if len(parts) > 1:
+            diagnoses.extend(m.strip() for m in _re.findall(pat, parts[1]) if m.strip())
+
+    if 'indicated below' in query_text.lower():
+        parts = _re.split(r'indicated below\.?', query_text, flags=_re.IGNORECASE)
+        if len(parts) > 1:
+            for line in parts[1].split('\n')[:10]:
+                line = line.strip()
+                if any(skip in line.lower() for skip in [
+                    'this documentation', 'provider response', 'medical record',
+                    '[]', 'ruled out',
+                ]):
+                    continue
+                if '[x]' in line.lower() or '[ x ]' in line.lower():
+                    m = _re.search(r'\[\s*[Xx]\s*\]\s*(.+)', line)
+                    if m:
+                        diagnoses.append(m.group(1).strip())
+
+    # Dedupe while preserving order
+    seen = set()
+    out = []
+    for d in diagnoses:
+        if d not in seen:
+            seen.add(d)
+            out.append(d)
+    return out
+
+
 def parse_llm_diagnoses(raw_response: str) -> List[Dict]:
     """Parse LLM response into list of diagnosis dicts."""
     # Try JSON array parse
@@ -915,44 +971,91 @@ class HillClimbRunner:
 
     def load_cases(self) -> List[Dict]:
         """Load evaluation cases with stratified sampling across CDI categories.
-        Ensures every diagnosis category is represented (min 2 per category).
-        Falls back to random sampling if stratified sample file not found.
+
+        Auto-detects dataset format:
+          - Old: cdi_diagnoses_confirmed column + encounter_csn + singular notes
+          - New: query_text column + anon_id + multi-note (progress_note_1/2/3,
+                 consult_note_1/2, procedure_note_1/2, ed_note, ip_consult_note)
+
+        The new format (cdi_expanded_notes_eval.csv) is the eval set we care
+        about now. Loading every available note matters — running hill-climb
+        on discharge-only context gives recall numbers that aren't comparable
+        to the evaluator's full-context numbers.
         """
         print(f"Loading data from {self.data_path}...")
         df = pd.read_csv(self.data_path)
-        df = df[df['cdi_diagnoses_confirmed'].notna()].copy()
+
+        # Detect ground-truth column
+        if "cdi_diagnoses_confirmed" in df.columns:
+            gt_col = "cdi_diagnoses_confirmed"
+            gt_parser = extract_diagnoses_from_query
+            print(f"  Ground-truth: parsed list in '{gt_col}'")
+        elif "query_text" in df.columns:
+            gt_col = "query_text"
+            gt_parser = extract_diagnoses_from_query_text
+            print(f"  Ground-truth: raw query text in '{gt_col}' (parsing on the fly)")
+        else:
+            raise RuntimeError(
+                f"No recognised CDI ground-truth column. Expected one of: "
+                f"cdi_diagnoses_confirmed, query_text. Got: {list(df.columns)}"
+            )
+        df = df[df[gt_col].notna()].copy()
+
+        # Detect case ID column
+        id_col = next((c for c in ("encounter_csn", "anon_id", "case_id")
+                       if c in df.columns), None)
+        if id_col is None:
+            raise RuntimeError("No case identifier column found "
+                               "(expected encounter_csn, anon_id, or case_id)")
+        print(f"  Case ID column: '{id_col}'")
 
         # Try stratified sampling first
         stratified_path = Path(self.data_path).parent / "stratified_eval_sample.csv"
-        if stratified_path.exists() and self.sample_size >= 40:
+        if stratified_path.exists() and self.sample_size >= 40 and id_col == "encounter_csn":
             print(f"Using stratified sample from {stratified_path}")
             strat = pd.read_csv(stratified_path)
             strat_csns = set(strat['encounter_csn'].astype(str))
             sample = df[df['encounter_csn'].astype(str).isin(strat_csns)].copy()
-            # If stratified sample is larger than requested, trim proportionally
             if len(sample) > self.sample_size:
                 random.seed(42)
                 sample = sample.sample(n=self.sample_size, random_state=42)
             print(f"  Stratified sample: {len(sample)} cases across {strat['category'].nunique()} categories")
         else:
-            # Random sampling fallback
-            random.seed(42)
-            indices = random.sample(range(len(df)), min(self.sample_size, len(df)))
-            sample = df.iloc[indices].copy()
+            # Random sampling with seed=42 — same recipe as evaluate_cdi_accuracy.py
+            sample = df.sample(n=min(self.sample_size, len(df)), random_state=42)
 
         sample = sample.reset_index(drop=True)
 
+        # Multi-note loaders (gracefully fall back if any column is missing)
+        def _str_or_none(v):
+            return str(v) if pd.notna(v) and str(v).strip() else None
+
+        def _list_notes(row, *cols):
+            return [n for n in (_str_or_none(row.get(c)) for c in cols) if n]
+
         cases = []
         for _, row in sample.iterrows():
-            true_dx = extract_diagnoses_from_query(row.get('cdi_diagnoses_confirmed', ''))
+            true_dx = gt_parser(row.get(gt_col, ''))
             if not true_dx:
                 continue
+
+            progress_notes = _list_notes(row, 'progress_note_1', 'progress_note_2', 'progress_note_3')
+            consult_notes = _list_notes(row, 'consult_note_1', 'consult_note_2')
+            procedure_notes = _list_notes(row, 'procedure_note_1', 'procedure_note_2')
+
             cases.append({
-                'id': str(row.get('encounter_csn', len(cases))),
+                'id': str(row.get(id_col, len(cases))),
                 'discharge_summary': str(row.get('discharge_summary', '')),
-                'progress_note': str(row.get('progress_note', '')) if pd.notna(row.get('progress_note')) else None,
-                'hp_note': str(row.get('hp_note', '')) if pd.notna(row.get('hp_note', None)) else None,
-                'consult_note': str(row.get('consult_note', '')) if pd.notna(row.get('consult_note', None)) else None,
+                # Legacy singular notes (back-compat with old datasets)
+                'progress_note': _str_or_none(row.get('progress_note')),
+                'hp_note': _str_or_none(row.get('hp_note')),
+                'consult_note': _str_or_none(row.get('consult_note')),
+                # Expanded notes (cdi_expanded_notes_eval.csv format)
+                'ed_note': _str_or_none(row.get('ed_note')),
+                'progress_notes': progress_notes,
+                'consult_notes': consult_notes,
+                'procedure_notes': procedure_notes,
+                'ip_consult_note': _str_or_none(row.get('ip_consult_note')),
                 'true_diagnoses': true_dx,
             })
 
@@ -960,15 +1063,45 @@ class HillClimbRunner:
         return cases
 
     def _build_notes_text(self, case: Dict) -> str:
-        """Build the full clinical notes text from all available note types."""
-        text = case['discharge_summary']
-        if case.get('progress_note'):
-            text += f"\n\nPROGRESS NOTE:\n{case['progress_note']}"
+        """Build the full clinical notes text from all available note types.
+
+        Handles both legacy (singular progress_note/consult_note) and the
+        expanded multi-note format (progress_note_1/2/3, consult_note_1/2,
+        procedure_note_1/2, ed_note, ip_consult_note) so hill-climb runs
+        on the same context the evaluator uses.
+        """
+        parts = ["DISCHARGE SUMMARY:\n" + case['discharge_summary']]
+
         if case.get('hp_note'):
-            text += f"\n\nHISTORY & PHYSICAL:\n{case['hp_note']}"
-        if case.get('consult_note'):
-            text += f"\n\nCONSULTATION NOTE:\n{case['consult_note']}"
-        return text
+            parts.append(f"\n\nHISTORY & PHYSICAL:\n{case['hp_note']}")
+        if case.get('ed_note'):
+            parts.append(f"\n\nEMERGENCY DEPARTMENT NOTE:\n{case['ed_note']}")
+
+        # Progress notes — prefer the multi-note list; fall back to legacy singular
+        all_progress = list(case.get('progress_notes') or [])
+        if not all_progress and case.get('progress_note'):
+            all_progress.append(case['progress_note'])
+        for i, n in enumerate(all_progress, 1):
+            label = "PROGRESS NOTE" if len(all_progress) == 1 else f"PROGRESS NOTE {i}"
+            parts.append(f"\n\n{label}:\n{n}")
+
+        # Consult notes — same pattern
+        all_consults = list(case.get('consult_notes') or [])
+        if not all_consults and case.get('consult_note'):
+            all_consults.append(case['consult_note'])
+        for i, n in enumerate(all_consults, 1):
+            label = "CONSULT NOTE" if len(all_consults) == 1 else f"CONSULT NOTE {i}"
+            parts.append(f"\n\n{label}:\n{n}")
+
+        # Procedure notes
+        for i, n in enumerate(case.get('procedure_notes') or [], 1):
+            label = "PROCEDURE NOTE" if i == 1 and len(case.get('procedure_notes') or []) == 1 else f"PROCEDURE NOTE {i}"
+            parts.append(f"\n\n{label}:\n{n}")
+
+        if case.get('ip_consult_note'):
+            parts.append(f"\n\nINPATIENT CONSULT NOTE:\n{case['ip_consult_note']}")
+
+        return "".join(parts)
 
     def _call_single(self, system: str, user_content: str, temperature: float = 0.2) -> str:
         """Make a single LLM call and return raw text."""
@@ -1354,9 +1487,21 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='Hill-climbing CDI evaluation')
     parser.add_argument('--api-key', required=True)
-    parser.add_argument('--model', default='gpt-5', choices=['gpt-5', 'gpt-4.1', 'gpt-5-nano'])
-    parser.add_argument('--data', default='data/cdi_full_dataset_parsed_confirmed_only.csv',
-                        help='Dataset CSV (default: expanded 768-row dataset with 4 note types)')
+    parser.add_argument('--model', default='gpt-5', choices=[
+        # GPT-5 family (8 May 2026 — AI Hub roster)
+        'gpt-5', 'gpt-5-1', 'gpt-5-2', 'gpt-5-4',
+        'gpt-5-mini', 'gpt-5-nano',
+        'gpt-5-4-mini', 'gpt-5-4-nano',
+        # GPT-4.1 family
+        'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano',
+        # Claude (via AWS Bedrock on AI Hub)
+        'claude-opus-4-7', 'claude-opus-4-6', 'claude-opus-4-1',
+        'claude-sonnet-4-6', 'claude-sonnet-4-5',
+        'claude-haiku-4-5',
+    ])
+    parser.add_argument('--data', default='data/cdi_expanded_notes_eval.csv',
+                        help='Dataset CSV (default: 1086-row multi-note eval set with 11 note '
+                             'types per case — same dataset evaluate_cdi_accuracy.py uses)')
     parser.add_argument('--sample-size', type=int, default=30)
     parser.add_argument('--results-dir', default='results')
     args = parser.parse_args()

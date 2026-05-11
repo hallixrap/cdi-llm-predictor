@@ -651,7 +651,18 @@ Examples:
     parser.add_argument(
         '--model',
         default='gpt-5',
-        choices=['gpt-5', 'gpt-4.1', 'gpt-5-nano', 'gpt-4.1-mini'],
+        choices=[
+            # GPT-5 family (8 May 2026 — AI Hub roster)
+            'gpt-5', 'gpt-5-1', 'gpt-5-2', 'gpt-5-4',
+            'gpt-5-mini', 'gpt-5-nano',
+            'gpt-5-4-mini', 'gpt-5-4-nano',
+            # GPT-4.1 family
+            'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano',
+            # Claude (via AWS Bedrock on AI Hub)
+            'claude-opus-4-7', 'claude-opus-4-6', 'claude-opus-4-1',
+            'claude-sonnet-4-6', 'claude-sonnet-4-5',
+            'claude-haiku-4-5',
+        ],
         help='Model to use for predictions (default: gpt-5)'
     )
     parser.add_argument(

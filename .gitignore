@@ -71,6 +71,14 @@ Context/
 # Meeting transcripts (may contain PII / colleague names)
 transcripts/
 
+# Reference copy of Anthropic-built cdi-agent (lives at the parent
+# Coding/ folder; copied in here for read access from Cowork sandbox).
+_cdi_agent_ref/
+
+# Cowork-generated commit scripts (one-shot helpers, not source)
+run_*_commit.sh
+run_commits.sh
+
 # SQL queries folder (contains PHI data)
 SQL queries/
 

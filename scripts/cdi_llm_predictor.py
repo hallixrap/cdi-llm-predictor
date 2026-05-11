@@ -18,19 +18,24 @@ from datetime import datetime
 def call_stanford_llm(prompt: str, api_key: str, model: str = "gpt-4.1") -> str:
     """Call Stanford's PHI-safe LLM"""
     headers = {
-        'Ocp-Apim-Subscription-Key': api_key,
+        # AI Hub gateway (aihubapi.stanfordhealthcare.org) uses "api-key"
+        # header, not the old APIM "Ocp-Apim-Subscription-Key" header.
+        'api-key': api_key,
         'Content-Type': 'application/json'
     }
 
-    # Model endpoints - Stanford SecureGPT API
+    # Model endpoints — Stanford SecureGPT AI Hub
+    # Migrated 8 May 2026 from apim.stanfordhealthcare.org → aihubapi.stanfordhealthcare.org
     model_urls = {
-        "gpt-5": "https://apim.stanfordhealthcare.org/openai-eastus2/deployments/gpt-5/chat/completions?api-version=2024-12-01-preview",
-        "gpt-4.1": "https://apim.stanfordhealthcare.org/openai-eastus2/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
-        "gpt-5-nano": "https://apim.stanfordhealthcare.org/openai-eastus2/deployments/gpt-5-nano/chat/completions?api-version=2024-12-01-preview",
-        "gpt-4.1-mini": "https://apim.stanfordhealthcare.org/openai-eastus2/deployments/gpt-4.1-mini/chat/completions?api-version=2025-01-01-preview",
-        # Claude models via Stanford Anthropic endpoint
-        "claude-opus-4": "https://apim.stanfordhealthcare.org/anthropic/v1/messages",
-        "claude-sonnet-4": "https://apim.stanfordhealthcare.org/anthropic/v1/messages",
+        "gpt-5": "https://aihubapi.stanfordhealthcare.org/azure-openai/deployments/gpt-5/chat/completions?api-version=2024-12-01-preview",
+        "gpt-4.1": "https://aihubapi.stanfordhealthcare.org/azure-openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
+        "gpt-5-nano": "https://aihubapi.stanfordhealthcare.org/azure-openai/deployments/gpt-5-nano/chat/completions?api-version=2024-12-01-preview",
+        "gpt-4.1-mini": "https://aihubapi.stanfordhealthcare.org/azure-openai/deployments/gpt-4.1-mini/chat/completions?api-version=2025-01-01-preview",
+        # Claude models — now via AWS Bedrock on AI Hub.
+        # Bedrock uses a DIFFERENT request body shape (anthropic_version field,
+        # no "model" in body) — handled by the is_claude branch below.
+        "claude-opus-4": "https://aihubapi.stanfordhealthcare.org/aws-bedrock/model/us.anthropic.claude-opus-4-1-20250805-v1:0/invoke",
+        "claude-sonnet-4": "https://aihubapi.stanfordhealthcare.org/aws-bedrock/model/us.anthropic.claude-sonnet-4-5-20250929-v1:0/invoke",
     }
 
     url = model_urls.get(model, model_urls["gpt-4.1"])

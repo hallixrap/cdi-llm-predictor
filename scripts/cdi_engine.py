@@ -40,24 +40,152 @@ from datetime import datetime
 # ===========================================================================
 
 API_ENDPOINTS = {
-    "gpt-5": "https://apim.stanfordhealthcare.org/openai-eastus2/deployments/gpt-5/chat/completions?api-version=2024-12-01-preview",
-    "gpt-4.1": "https://apim.stanfordhealthcare.org/openai-eastus2/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
-    "gpt-5-nano": "https://apim.stanfordhealthcare.org/openai-eastus2/deployments/gpt-5-nano/chat/completions?api-version=2024-12-01-preview",
+    # Migrated 8 May 2026 from apim.stanfordhealthcare.org → aihubapi.stanfordhealthcare.org
+    # New SecureGPT AI Hub gateway with BAA coverage for PHI/PII.
+    # Auth header is "api-key" (NOT the old "Ocp-Apim-Subscription-Key").
+    "gpt-5": "https://aihubapi.stanfordhealthcare.org/azure-openai/deployments/gpt-5/chat/completions?api-version=2024-12-01-preview",
+    "gpt-5-1": "https://aihubapi.stanfordhealthcare.org/azure-openai/deployments/gpt-5-1/chat/completions?api-version=2024-12-01-preview",
+    "gpt-5-2": "https://aihubapi.stanfordhealthcare.org/azure-openai/deployments/gpt-5-2/chat/completions?api-version=2024-12-01-preview",
+    "gpt-5-4": "https://aihubapi.stanfordhealthcare.org/azure-openai/deployments/gpt-5-4/chat/completions?api-version=2024-12-01-preview",
+    "gpt-5-mini": "https://aihubapi.stanfordhealthcare.org/azure-openai/deployments/gpt-5-mini/chat/completions?api-version=2024-12-01-preview",
+    "gpt-5-nano": "https://aihubapi.stanfordhealthcare.org/azure-openai/deployments/gpt-5-nano/chat/completions?api-version=2024-12-01-preview",
+    "gpt-5-4-mini": "https://aihubapi.stanfordhealthcare.org/azure-openai/deployments/gpt-5-4-mini/chat/completions?api-version=2024-12-01-preview",
+    "gpt-5-4-nano": "https://aihubapi.stanfordhealthcare.org/azure-openai/deployments/gpt-5-4-nano/chat/completions?api-version=2024-12-01-preview",
+    "gpt-4.1": "https://aihubapi.stanfordhealthcare.org/azure-openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
+    "gpt-4.1-mini": "https://aihubapi.stanfordhealthcare.org/azure-openai/deployments/gpt-4.1-mini/chat/completions?api-version=2025-01-01-preview",
+    "gpt-4.1-nano": "https://aihubapi.stanfordhealthcare.org/azure-openai/deployments/gpt-4.1-nano/chat/completions?api-version=2025-01-01-preview",
 }
+
+
+# Bedrock-routed Claude models on AI Hub. Different URL pattern, different
+# request body shape (no "model" in body — model goes in URL path; uses
+# anthropic_version field), different response shape.
+# Model IDs from the AI Hub AWS Bedrock API listing (8 May 2026).
+BEDROCK_MODEL_IDS = {
+    "claude-opus-4-7":            "us.anthropic.claude-opus-4-7",
+    "claude-opus-4-6":            "us.anthropic.claude-opus-4-6-v1",
+    "claude-opus-4-1":            "us.anthropic.claude-opus-4-1-20250805-v1:0",
+    "claude-sonnet-4-6":          "us.anthropic.claude-sonnet-4-6",
+    "claude-sonnet-4-5":          "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "claude-haiku-4-5":           "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+}
+BEDROCK_BASE = "https://aihubapi.stanfordhealthcare.org/aws-bedrock/model/{}/invoke"
+
+
+def _is_bedrock_model(model: str) -> bool:
+    return model.startswith("claude")
+
+
+def _call_bedrock(messages: list, api_key: str, model: str,
+                  max_tokens: int = 8000) -> str:
+    """Call a Claude model via AWS Bedrock through the AI Hub gateway.
+
+    Bedrock wraps Anthropic's native messages API but requires
+    `anthropic_version` and does NOT take `model` in the body (model is in
+    the URL path). Response shape matches Anthropic native: top-level
+    `content` array of {type, text} blocks.
+    """
+    bedrock_id = BEDROCK_MODEL_IDS.get(model)
+    if not bedrock_id:
+        raise RuntimeError(f"Unknown Claude model: {model}. "
+                           f"Known: {list(BEDROCK_MODEL_IDS)}")
+    url = BEDROCK_BASE.format(bedrock_id)
+    headers = {
+        "Content-Type": "application/json",
+        "api-key": api_key,
+    }
+
+    # Bedrock body: anthropic_version is required; system prompt goes
+    # in a top-level "system" field, NOT as a message with role "system".
+    system_text = ""
+    user_messages = []
+    for m in messages:
+        if m["role"] == "system":
+            system_text += (m["content"] + "\n")
+        else:
+            user_messages.append(m)
+
+    body = {
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": max_tokens,
+        "messages": user_messages,
+    }
+    if system_text.strip():
+        body["system"] = system_text.strip()
+
+    for attempt in range(5):
+        try:
+            resp = requests.post(url, headers=headers,
+                                 data=json.dumps(body), timeout=300)
+
+            if resp.status_code == 429 or resp.status_code >= 500:
+                wait = 2 ** (attempt + 1) + random.random() * 2
+                time.sleep(wait)
+                continue
+
+            if resp.status_code != 200:
+                if 400 <= resp.status_code < 500 and resp.status_code != 429:
+                    raise RuntimeError(f"API {resp.status_code}: {resp.text[:300]}")
+                wait = 2 ** (attempt + 1)
+                time.sleep(wait)
+                continue
+
+            data = resp.json()
+            # Bedrock-Anthropic response: {"content": [{"type":"text","text":...}], ...}
+            content_blocks = data.get("content", [])
+            text_chunks = [b.get("text", "") for b in content_blocks
+                           if b.get("type") == "text"]
+            content = "".join(text_chunks)
+
+            if not content:
+                stop = data.get("stop_reason", "unknown")
+                if stop == "max_tokens":
+                    raise RuntimeError(
+                        f"Bedrock response truncated at max_tokens={max_tokens}"
+                    )
+                return ""
+
+            time.sleep(0.5)
+            return content
+
+        except requests.exceptions.Timeout:
+            time.sleep(2 ** (attempt + 1) + random.random() * 2)
+        except requests.exceptions.ConnectionError:
+            time.sleep(2 ** (attempt + 1) + random.random() * 2)
+
+    raise RuntimeError("API call failed after 5 retries")
 
 
 def _call_llm(messages: list, api_key: str, model: str = "gpt-5",
               temperature: float = 0.2, max_tokens: int = 32000) -> str:
-    """Call Stanford LLM with robust retry logic.
+    """Dispatch to the right backend (Azure OpenAI or AWS Bedrock).
 
     GPT-5 note: max_completion_tokens covers BOTH reasoning tokens and output
     tokens. With 16k, reasoning often consumes everything. Default raised to 32k.
     If truncated, retries automatically with doubled budget (up to 65k).
+
+    Claude (Bedrock) note: max_tokens is just output budget; no reasoning-token
+    overhead. Default 8000 is fine for the v15 prompt.
+
+    Possible 401 causes (printed via 4xx error on the hint block in
+    cdi_llm_predictor.py):
+      1. API key has expired or wrong subscription —
+         visit https://aihubapi.stanfordhealthcare.org/profile or
+         contact Fateme Nateghi for new credentials.
+      2. Wrong auth header — AI Hub uses 'api-key', NOT 'Ocp-Apim-Subscription-Key'.
+      3. Wrong gateway — must be aihubapi.stanfordhealthcare.org, not the old apim.
     """
+    if _is_bedrock_model(model):
+        # Bedrock has its own (smaller, output-only) token budget
+        return _call_bedrock(messages, api_key, model, max_tokens=8000)
+
     url = API_ENDPOINTS.get(model, API_ENDPOINTS["gpt-5"])
     headers = {
         "Content-Type": "application/json",
-        "Ocp-Apim-Subscription-Key": api_key,
+        # AI Hub gateway (aihubapi.stanfordhealthcare.org) uses "api-key"
+        # header, not the old APIM "Ocp-Apim-Subscription-Key" header.
+        # Confirmed via WWW-Authenticate response header from the new gateway.
+        "api-key": api_key,
     }
 
     is_gpt5 = model.startswith("gpt-5")
@@ -775,12 +903,72 @@ def _diagnoses_similar(a: str, b: str, threshold: float = 0.5) -> bool:
 # MAIN ENGINE
 # ===========================================================================
 
+def load_prompt_variant(variant_name: str) -> Dict:
+    """Load a prompt variant config from run_hill_climb.PROMPT_VARIANTS.
+
+    Returns a dict with at least:
+      - predict_method: "single_pass" (default) or "two_pass_verify"
+      - For single_pass: system, user_prefix
+      - For two_pass_verify: system_pass1, user_prefix_pass1,
+        system_pass2, user_prefix_pass2
+
+    Currently supported predict_methods: single_pass, two_pass_verify.
+    Other multi-pass methods (self_consistency, extract_then_classify)
+    raise NotImplementedError.
+    """
+    if variant_name == "v15_cdi_agent_style" or not variant_name:
+        return {
+            "predict_method": "single_pass",
+            "system": SYSTEM_PROMPT,
+            "user_prefix": USER_PREFIX,
+        }
+    # Lazy import — avoid circular deps and only load if requested
+    from run_hill_climb import PROMPT_VARIANTS  # type: ignore
+    if variant_name not in PROMPT_VARIANTS:
+        raise ValueError(
+            f"Unknown prompt variant: {variant_name!r}. "
+            f"Known: {list(PROMPT_VARIANTS.keys())}"
+        )
+    v = PROMPT_VARIANTS[variant_name]
+    method = v.get("predict_method", "single_pass")
+    if method in ("self_consistency", "extract_then_classify"):
+        raise NotImplementedError(
+            f"Variant {variant_name!r} uses predict_method={method!r} which "
+            f"isn't supported in CDIEngine yet. Supported: single_pass, "
+            f"two_pass_verify."
+        )
+    if method == "two_pass_verify":
+        return {
+            "predict_method": "two_pass_verify",
+            "system_pass1": v.get("system_pass1", ""),
+            "user_prefix_pass1": v.get("user_prefix_pass1", ""),
+            "system_pass2": v.get("system_pass2", ""),
+            "user_prefix_pass2": v.get("user_prefix_pass2", ""),
+        }
+    return {
+        "predict_method": "single_pass",
+        "system": v.get("system") or "",
+        "user_prefix": v.get("user_prefix") or "",
+    }
+
+
 class CDIEngine:
     """Production CDI prediction engine."""
 
-    def __init__(self, api_key: str, model: str = "gpt-5"):
+    def __init__(self, api_key: str, model: str = "gpt-5",
+                 prompt_variant: str = "v15_cdi_agent_style"):
         self.api_key = api_key
         self.model = model
+        self.prompt_variant = prompt_variant
+        # Variant config dict — has predict_method + prompt fields.
+        # For single_pass: system, user_prefix.
+        # For two_pass_verify: system_pass1, user_prefix_pass1,
+        #                      system_pass2, user_prefix_pass2.
+        self.variant = load_prompt_variant(prompt_variant)
+        self.predict_method = self.variant["predict_method"]
+        # Back-compat aliases used by single-pass code paths
+        self.system_prompt = self.variant.get("system", "")
+        self.user_prefix = self.variant.get("user_prefix", "")
 
     def _build_user_content(self, discharge_summary: str,
                             progress_note: Optional[str] = None,
@@ -796,7 +984,7 @@ class CDIEngine:
         Supports both legacy (single progress_note/consult_note) and expanded
         dataset (multiple notes of each type from cdi_expanded_notes.csv).
         """
-        content = USER_PREFIX + "DISCHARGE SUMMARY:\n" + discharge_summary
+        content = self.user_prefix + "DISCHARGE SUMMARY:\n" + discharge_summary
 
         # H&P — admission workup, baseline labs, initial assessment
         if hp_note:
@@ -845,10 +1033,10 @@ class CDIEngine:
         Args:
             raise_on_error: If False, returns empty list on failure (for voting).
         """
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
-        ]
+        messages = []
+        if self.system_prompt:  # v13_category_expanded uses user-only design
+            messages.append({"role": "system", "content": self.system_prompt})
+        messages.append({"role": "user", "content": user_content})
         try:
             raw = _call_llm(messages, self.api_key, model=self.model,
                              temperature=temperature)
@@ -858,6 +1046,79 @@ class CDIEngine:
                 raise
             print(f"    Voting pass failed (will skip): {e}")
             return []
+
+    def _two_pass_verify(self, user_content: str,
+                         temperature: float = 0.2) -> List[Dict]:
+        """v18 two-pass verify (IEEE 2025 verification paradigm).
+
+        Pass 1: generate broadly — "list every potentially missed diagnosis
+                with brief evidence". Returns candidates with high recall.
+        Pass 2: audit each candidate against the chart — "CONFIRMED if clear
+                evidence supports this, REJECTED otherwise". Returns only
+                CONFIRMED with full enrichment (ICD-10, category, evidence).
+
+        Structurally strips hallucinations: a fabricated diagnosis from
+        Pass 1 won't survive Pass 2's chart-grounded verification.
+        """
+        v = self.variant
+        # The user_content arg was assembled by _build_user_content with the
+        # v15 user_prefix prepended ahead of "DISCHARGE SUMMARY:\n<text>".
+        # Both v18 user_prefix_pass1 and user_prefix_pass2 already include
+        # the "DISCHARGE SUMMARY:\n" label, so we strip everything up to and
+        # including that label from user_content before appending the body.
+        marker = "DISCHARGE SUMMARY:\n"
+        if marker in user_content:
+            body = user_content[user_content.index(marker) + len(marker):]
+        else:
+            body = user_content
+
+        # --- Pass 1: broad generation ---------------------------------------
+        pass1_user = v["user_prefix_pass1"] + body
+        msgs1 = []
+        if v.get("system_pass1"):
+            msgs1.append({"role": "system", "content": v["system_pass1"]})
+        msgs1.append({"role": "user", "content": pass1_user})
+
+        try:
+            raw1 = _call_llm(msgs1, self.api_key, model=self.model,
+                              temperature=temperature)
+            candidates = _parse_llm_response(raw1)
+        except Exception as e:
+            print(f"    Pass 1 (generation) failed: {e}")
+            return []
+
+        if not candidates:
+            return []
+
+        # --- Pass 2: verification -------------------------------------------
+        # Format candidates as a numbered list so Pass 2 can address each.
+        cand_lines = []
+        for i, c in enumerate(candidates, 1):
+            if isinstance(c, dict):
+                dx = c.get("diagnosis", "")
+                ev = c.get("evidence", "")
+                cand_lines.append(f"{i}. {dx} — evidence: {ev}")
+            else:
+                cand_lines.append(f"{i}. {c}")
+        candidates_str = "\n".join(cand_lines)
+
+        pass2_prefix = v["user_prefix_pass2"].replace("{candidates}", candidates_str)
+        pass2_user = pass2_prefix + body
+
+        msgs2 = []
+        if v.get("system_pass2"):
+            msgs2.append({"role": "system", "content": v["system_pass2"]})
+        msgs2.append({"role": "user", "content": pass2_user})
+
+        try:
+            raw2 = _call_llm(msgs2, self.api_key, model=self.model,
+                              temperature=temperature)
+            confirmed = _parse_llm_response(raw2)
+        except Exception as e:
+            print(f"    Pass 2 (verification) failed: {e}")
+            return candidates  # fallback to unverified Pass 1 output
+
+        return confirmed
 
     def _vote(self, all_runs: List[List[Dict]], threshold: int) -> List[Dict]:
         """Aggregate multiple prediction runs via majority voting.
@@ -1000,7 +1261,13 @@ class CDIEngine:
             ip_consult_note=ip_consult_note,
         )
 
-        if mode == "fast":
+        # Multi-pass methods (v18, v19, etc) dispatch on prompt_variant's
+        # predict_method, NOT on the user's --engine-mode flag. mode is
+        # ignored for these variants.
+        if self.predict_method == "two_pass_verify":
+            predictions = self._two_pass_verify(user_content, temperature=0.2)
+
+        elif mode == "fast":
             raw_preds = self._single_pass(user_content, temperature=0.2)
             # Assign confidence based on LLM's own confidence field
             predictions = raw_preds
@@ -1043,19 +1310,21 @@ class CDIEngine:
         else:
             raise ValueError(f"Unknown mode: {mode}. Use 'fast', 'balanced', or 'high_recall'.")
 
-        # Filter BYPASSED (2026-04-17): LLM judge on 300-sample (17 Apr run)
-        # showed LEGITIMATE_CDI=49.0%, ALREADY_CODED=16.3%. Filter was not
-        # delivering the precision gain it was meant to — ALREADY_CODED is
-        # still the second-largest bucket post-filter, and the filter cost
-        # ~2.76pp recall vs 13 Apr baseline (paired 726-case subset).
-        # Reverting to clean baseline before applying Phase D progress-note
-        # prompt. Filter needs a structural rethink, not a tweak.
-        # We still extract documented diagnoses for the summary stat, but
-        # skip the filter call. Restore the filter by uncommenting below.
+        # Filter RESTORED (2026-05-01): the 17 Apr bypass was based on the
+        # judgment that the filter cost ~2.76pp recall for marginal
+        # precision gain. Phase C (28 Apr) demonstrated the opposite is
+        # also true: with the filter OFF, expanding the prompt's recall
+        # surface (four new "always query" rule blocks for pathology /
+        # post-op / fractures / shock) inflated ALREADY_CODED by +9.2pp
+        # and dropped LEGITIMATE_CDI by 7.1pp on a paired 300-sample
+        # judge run. The filter is load-bearing infrastructure for ANY
+        # future prompt expansion — without it, new rules pile up false
+        # positives on documented conditions. Restoring before
+        # re-attempting Phase E (cancer/pathology pipeline pass) and
+        # Phase C.3 (electrolytes trigger loosening).
         documented = _extract_documented_diagnoses(discharge_summary)
-        # predictions, filtered_out = _filter_already_documented(
-        #     predictions, documented, full_text=discharge_summary)
-        filtered_out = []
+        predictions, filtered_out = _filter_already_documented(
+            predictions, documented, full_text=discharge_summary)
 
         # Enrich with DRG impact, categories, revenue estimates
         enriched = self._enrich(predictions)
@@ -1089,13 +1358,17 @@ class CDIEngine:
             },
             "metadata": {
                 "model": self.model,
-                "mode": mode,
-                "api_calls": {"fast": 1, "balanced": 3, "high_recall": 5}[mode],
+                "mode": mode if self.predict_method == "single_pass" else self.predict_method,
+                "predict_method": self.predict_method,
+                "api_calls": (
+                    2 if self.predict_method == "two_pass_verify"
+                    else {"fast": 1, "balanced": 3, "high_recall": 5}[mode]
+                ),
                 "elapsed_seconds": round(elapsed, 1),
                 "timestamp": datetime.now().isoformat(),
-                "engine_version": "1.1.0",
-                "prompt_variant": "v15_cdi_agent_style",
-                "voting": mode != "fast",
+                "engine_version": "1.2.0",
+                "prompt_variant": self.prompt_variant,
+                "voting": self.predict_method == "single_pass" and mode != "fast",
                 "filtered_already_documented": filtered_out,
                 "filtered_count": len(filtered_out),
                 "documented_diagnoses_found": len(documented),

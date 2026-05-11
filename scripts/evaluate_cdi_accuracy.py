@@ -243,7 +243,10 @@ def evaluate_single_case(discharge_summary: str, true_diagnoses: List[str],
                          ip_consult_note: str = None,
                          use_engine: bool = True,
                          engine: 'CDIEngine' = None,
-                         engine_mode: str = "balanced") -> Dict:
+                         engine_mode: str = "balanced",
+                         use_agent: bool = False,
+                         agent_runner=None,
+                         prompt_variant: str = "v15_cdi_agent_style") -> Dict:
     """
     Evaluate LLM predictor on a single case.
 
@@ -274,10 +277,34 @@ def evaluate_single_case(discharge_summary: str, true_diagnoses: List[str],
         print(f"CDI queried about: {', '.join(true_diagnoses)}")
 
     try:
-        if use_engine:
+        if use_agent:
+            # Experiment track: agentic CDI runner on Bedrock Claude.
+            # Replicates the Anthropic-built cdi-agent shape (multi-turn
+            # tool use + structured-output tool + ICD-10 format validation
+            # hook) on Stanford's PHI-safe gateway. Independent code path
+            # from CDIEngine — same input/output shape so this branch is
+            # otherwise identical to the engine branch below.
+            if agent_runner is None:
+                from cdi_agent_runner import CDIAgentRunner
+                agent_runner = CDIAgentRunner(api_key=api_key, model=model)
+            result = agent_runner.analyse(
+                discharge_summary=discharge_summary,
+                progress_note=progress_note,
+                hp_note=hp_note,
+                ed_note=ed_note,
+                progress_notes=progress_notes,
+                consult_notes=consult_notes,
+                procedure_notes=procedure_notes,
+                ip_consult_note=ip_consult_note,
+            )
+            preds = result.get('predictions', [])
+            pred_diagnoses = [dx.get('diagnosis', '') for dx in preds]
+            pred_categories = [dx.get('category', '') for dx in preds]
+        elif use_engine:
             # Use CDIEngine (v15 prompt + self-consistency voting + 90% precision filter)
             if engine is None:
-                engine = CDIEngine(api_key=api_key, model=model)
+                engine = CDIEngine(api_key=api_key, model=model,
+                                   prompt_variant=prompt_variant)
             result = engine.analyse(
                 discharge_summary=discharge_summary,
                 progress_note=progress_note,
@@ -377,7 +404,9 @@ def run_evaluation(df: pd.DataFrame, api_key: str, model: str = "gpt-5",
                    use_llm_judge: bool = False, judge_model: str = "gpt-5-nano",
                    use_engine: bool = True,
                    engine_mode: str = "balanced",
-                   discharge_only: bool = False) -> Tuple[List[Dict], Dict]:
+                   discharge_only: bool = False,
+                   use_agent: bool = False,
+                   prompt_variant: str = "v15_cdi_agent_style") -> Tuple[List[Dict], Dict]:
     """
     Run full evaluation on dataset.
 
@@ -401,11 +430,20 @@ def run_evaluation(df: pd.DataFrame, api_key: str, model: str = "gpt-5",
     print(f"Dataset size: {len(df)} cases")
     print(f"{'='*80}")
 
-    # Initialize CDIEngine (shared across all cases)
+    # Initialize predictor pipeline (shared across all cases).
+    # Three independent paths: agent, engine, or legacy predictor.
     engine = None
-    if use_engine:
-        engine = CDIEngine(api_key=api_key, model=model)
-        print(f"CDIEngine: v15 prompt + {engine_mode} mode" +
+    agent_runner = None
+    if use_agent:
+        from cdi_agent_runner import CDIAgentRunner
+        agent_runner = CDIAgentRunner(api_key=api_key, model=model)
+        print(f"CDIAgentRunner: agentic loop on {model} (Bedrock)")
+        # Agent path is mutually exclusive with engine path
+        use_engine = False
+    elif use_engine:
+        engine = CDIEngine(api_key=api_key, model=model,
+                           prompt_variant=prompt_variant)
+        print(f"CDIEngine: {prompt_variant} prompt + {engine_mode} mode" +
               (" (self-consistency voting)" if engine_mode != "fast" else ""))
 
     # Initialize LLM matcher if using LLM judge
@@ -553,6 +591,9 @@ def run_evaluation(df: pd.DataFrame, api_key: str, model: str = "gpt-5",
             use_engine=use_engine,
             engine=engine,
             engine_mode=engine_mode,
+            use_agent=use_agent,
+            agent_runner=agent_runner,
+            prompt_variant=prompt_variant,
         )
         results.append(result)
 
@@ -617,7 +658,7 @@ def run_evaluation(df: pd.DataFrame, api_key: str, model: str = "gpt-5",
         'use_engine': use_engine,
         'engine_mode': engine_mode if use_engine else None,
         'discharge_only': discharge_only,
-        'prompt_variant': 'v15_cdi_agent_style' if use_engine else 'legacy_22_pattern',
+        'prompt_variant': prompt_variant if use_engine else 'legacy_22_pattern',
         'use_llm_judge': use_llm_judge,
         'judge_model': judge_model if use_llm_judge else None,
         'llm_judge_stats': llm_judge_stats,
@@ -746,7 +787,18 @@ def main():
     parser.add_argument('--sample', type=int, default=None,
                         help='Randomly sample N cases (use instead of --limit for unbiased eval)')
     parser.add_argument('--model', type=str, default='gpt-5',
-                        choices=['gpt-4.1', 'gpt-5', 'gpt-5-nano', 'gpt-4.1-mini', 'claude-opus-4', 'claude-sonnet-4'],
+                        choices=[
+                            # GPT-5 family (8 May 2026 — AI Hub roster)
+                            'gpt-5', 'gpt-5-1', 'gpt-5-2', 'gpt-5-4',
+                            'gpt-5-mini', 'gpt-5-nano',
+                            'gpt-5-4-mini', 'gpt-5-4-nano',
+                            # GPT-4.1 family
+                            'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano',
+                            # Claude via AWS Bedrock
+                            'claude-opus-4-7', 'claude-opus-4-6', 'claude-opus-4-1',
+                            'claude-sonnet-4-6', 'claude-sonnet-4-5',
+                            'claude-haiku-4-5',
+                        ],
                         help='LLM model to use')
     parser.add_argument('--limit', type=int, default=None,
                         help='Limit number of cases to evaluate')
@@ -771,10 +823,25 @@ def main():
     parser.add_argument('--discharge-only', action='store_true',
                         help='Use only the discharge summary, suppress all expanded note types '
                              '(for apples-to-apples baseline comparison)')
+    parser.add_argument('--use-agent', action='store_true',
+                        help='Use the agentic CDI runner (cdi_agent_runner.py) instead of '
+                             'CDIEngine. Replicates the Anthropic-built cdi-agent shape on '
+                             'Stanford Bedrock. Only works with claude-* models.')
+    parser.add_argument('--prompt-variant', type=str, default='v15_cdi_agent_style',
+                        help='Prompt variant from run_hill_climb.PROMPT_VARIANTS. Default '
+                             'v15_cdi_agent_style is the locked production prompt. Use to '
+                             'promote hill-climb candidates (e.g. v13_category_expanded, '
+                             'v17_recall_max) into production validation with voting + '
+                             'multi-note context. Multi-pass variants (v18_verify, '
+                             'v19_self_consistency) are not yet supported.')
 
     args = parser.parse_args()
     if args.no_engine:
         args.use_engine = False
+    if args.use_agent and not args.model.startswith('claude'):
+        print(f"❌ --use-agent requires a Claude model. Got: {args.model}")
+        print(f"   Try: --model claude-opus-4-7 (or claude-sonnet-4-6, claude-haiku-4-5)")
+        return 1
 
     # Get API key
     api_key = os.environ.get('STANFORD_API_KEY')
@@ -839,7 +906,9 @@ def main():
         judge_model=args.judge_model,
         use_engine=args.use_engine,
         engine_mode=args.engine_mode,
-        discharge_only=args.discharge_only
+        discharge_only=args.discharge_only,
+        use_agent=args.use_agent,
+        prompt_variant=args.prompt_variant,
     )
 
     # Print summary
