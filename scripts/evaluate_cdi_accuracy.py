@@ -246,7 +246,11 @@ def evaluate_single_case(discharge_summary: str, true_diagnoses: List[str],
                          engine_mode: str = "balanced",
                          use_agent: bool = False,
                          agent_runner=None,
-                         prompt_variant: str = "v15_cdi_agent_style") -> Dict:
+                         prompt_variant: str = "v15_cdi_agent_style",
+                         llm_filter: bool = False,
+                         filter_model: str = "gpt-5-nano",
+                         pathology_scan: bool = False,
+                         pathology_scan_model: str = None) -> Dict:
     """
     Evaluate LLM predictor on a single case.
 
@@ -304,7 +308,11 @@ def evaluate_single_case(discharge_summary: str, true_diagnoses: List[str],
             # Use CDIEngine (v15 prompt + self-consistency voting + 90% precision filter)
             if engine is None:
                 engine = CDIEngine(api_key=api_key, model=model,
-                                   prompt_variant=prompt_variant)
+                                   prompt_variant=prompt_variant,
+                                   llm_filter=llm_filter,
+                                   filter_model=filter_model,
+                                   pathology_scan=pathology_scan,
+                                   pathology_scan_model=pathology_scan_model)
             result = engine.analyse(
                 discharge_summary=discharge_summary,
                 progress_note=progress_note,
@@ -406,7 +414,11 @@ def run_evaluation(df: pd.DataFrame, api_key: str, model: str = "gpt-5",
                    engine_mode: str = "balanced",
                    discharge_only: bool = False,
                    use_agent: bool = False,
-                   prompt_variant: str = "v15_cdi_agent_style") -> Tuple[List[Dict], Dict]:
+                   prompt_variant: str = "v15_cdi_agent_style",
+                   llm_filter: bool = False,
+                   filter_model: str = "gpt-5-nano",
+                   pathology_scan: bool = False,
+                   pathology_scan_model: str = None) -> Tuple[List[Dict], Dict]:
     """
     Run full evaluation on dataset.
 
@@ -442,9 +454,16 @@ def run_evaluation(df: pd.DataFrame, api_key: str, model: str = "gpt-5",
         use_engine = False
     elif use_engine:
         engine = CDIEngine(api_key=api_key, model=model,
-                           prompt_variant=prompt_variant)
+                           prompt_variant=prompt_variant,
+                           llm_filter=llm_filter,
+                           filter_model=filter_model,
+                           pathology_scan=pathology_scan,
+                           pathology_scan_model=pathology_scan_model)
+        filter_label = f" + LLM filter ({filter_model})" if llm_filter else ""
+        path_label = f" + Phase E pathology scan ({pathology_scan_model or model})" if pathology_scan else ""
         print(f"CDIEngine: {prompt_variant} prompt + {engine_mode} mode" +
-              (" (self-consistency voting)" if engine_mode != "fast" else ""))
+              (" (self-consistency voting)" if engine_mode != "fast" else "") +
+              filter_label + path_label)
 
     # Initialize LLM matcher if using LLM judge
     llm_matcher = None
@@ -594,6 +613,10 @@ def run_evaluation(df: pd.DataFrame, api_key: str, model: str = "gpt-5",
             use_agent=use_agent,
             agent_runner=agent_runner,
             prompt_variant=prompt_variant,
+            llm_filter=llm_filter,
+            filter_model=filter_model,
+            pathology_scan=pathology_scan,
+            pathology_scan_model=pathology_scan_model,
         )
         results.append(result)
 
@@ -831,9 +854,27 @@ def main():
                         help='Prompt variant from run_hill_climb.PROMPT_VARIANTS. Default '
                              'v15_cdi_agent_style is the locked production prompt. Use to '
                              'promote hill-climb candidates (e.g. v13_category_expanded, '
-                             'v17_recall_max) into production validation with voting + '
-                             'multi-note context. Multi-pass variants (v18_verify, '
-                             'v19_self_consistency) are not yet supported.')
+                             'v17_recall_max, v18_verify) into production validation. '
+                             'v19_self_consistency is not yet supported.')
+    parser.add_argument('--llm-filter', action='store_true',
+                        help='Add a second pass through an LLM-based already-documented '
+                             'filter. Runs after the Jaccard filter; catches paraphrased '
+                             'duplicates ("AKI" vs "acute renal failure") that string '
+                             'matching misses. ~$0.0001/case on gpt-5-nano.')
+    parser.add_argument('--filter-model', type=str, default='gpt-5-nano',
+                        help='Model used by --llm-filter. Default gpt-5-nano (cheap, fast). '
+                             'claude-opus-4-7 gives stricter results closer to the '
+                             'precision judge but at higher cost.')
+    parser.add_argument('--pathology-scan', action='store_true',
+                        help='Phase E v1: run a focused pathology-gap scan after the main '
+                             'engine pass. Detects pathology-report-style segments in '
+                             'available notes (procedure, consult, discharge), extracts '
+                             'tissue-confirmed diagnoses NOT in the discharge documentation, '
+                             'and merges them into predictions. Targets the cancer_pathology '
+                             'cluster (88 GT queries, 19% recall — biggest "other" lever).')
+    parser.add_argument('--pathology-scan-model', type=str, default=None,
+                        help='Model for the Phase E pathology scan. Defaults to --model. '
+                             'Try claude-opus-4-7 for stricter cancer-finding extraction.')
 
     args = parser.parse_args()
     if args.no_engine:
@@ -909,6 +950,10 @@ def main():
         discharge_only=args.discharge_only,
         use_agent=args.use_agent,
         prompt_variant=args.prompt_variant,
+        llm_filter=args.llm_filter,
+        filter_model=args.filter_model,
+        pathology_scan=args.pathology_scan,
+        pathology_scan_model=args.pathology_scan_model,
     )
 
     # Print summary

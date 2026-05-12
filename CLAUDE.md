@@ -13,19 +13,34 @@ CDI (Clinical Documentation Improvement) diagnosis prediction system. Proactivel
 - **Gateway**: Migrated 8 May 2026 from `apim.stanfordhealthcare.org` (deprecated) to `aihubapi.stanfordhealthcare.org` (Stanford SecureGPT AI Hub). New auth header is **`api-key`** (NOT `Ocp-Apim-Subscription-Key`). Standard Product subscription covers both Azure AI Foundry (GPT-5/4.1 family) and AWS Bedrock (Claude family) under one key. BAA-covered for PHI/PII.
 - **Models available** on Stanford gateway: full GPT-5 family including `gpt-5-4` (≈ "GPT-5.5"), Claude Opus/Sonnet/Haiku 4.x via Bedrock — including target model `claude-opus-4-7`.
 
-## Active Experiment Track (Stage 2 paired comparison, planned)
+## Production Baseline (locked 11 May 2026)
 
-Five experiments scoped on the same 30-case stratified subset of the 1086 cases. Stage 3 hill-climbs only on whichever wins.
+**gpt-5-4 + v15_cdi_agent_style + balanced (3-vote) voting + Jaccard already-documented filter.**
 
-| # | Architecture | Model | Status |
+On 30-case paired sample (`data/cdi_expanded_notes_eval.csv`, seed=42):
+- Recall: 53.1%
+- LEGITIMATE_CDI: 53.3% (gpt-5 judge) / 30.0% (opus judge)
+- Composite (Recall × LEG): 28.3% (gpt-5) / 15.9% (opus)
+
+Six experimental variants tested against this baseline (Stage 2-5). All lost on Recall × LEG under both judges. See `NEGATIVE_RESULTS.md` for the detailed paired data.
+
+## Experiment Track
+
+| # | Architecture | Result | Notes |
 |---|---|---|---|
-| 1 | `CDIEngine` (current) — v15 prompt + balanced voting + filter | gpt-5 | Baseline |
-| 2 | `CDIEngine` | gpt-5-4 | Smoke-tested 8 May (3-case 100% recall) |
-| 3 | `CDIEngine` (Bedrock route) | claude-opus-4-7 | Smoke-tested 8 May (Bedrock connectivity confirmed) |
-| 4 | `CDIAgentRunner` — agentic tool-use loop with format-validation hook | claude-opus-4-7 | Built 8 May, awaiting smoke test |
-| 5 | `CDIEngine` + Phase E pathology-scan pass | TBD | Designed (`PHASE_E_PATHOLOGY_DESIGN.md`), deferred |
+| 1 | `CDIEngine` v15 + balanced | **Baseline winner** | Locked production setup |
+| 2 | `CDIEngine` v13_category_expanded | LOSE | User-only prompt, voting consensus weaker |
+| 3 | `CDIEngine` v17_recall_max | LOSE | +12pp recall bought with hallucination |
+| 4 | `CDIEngine` v18_verify (two-pass) | LOSE | Pass 2 confirms already-coded findings |
+| 5 | `CDIAgentRunner` on claude-opus-4-7 | LOSE | 30% hallucination — primer too aggressive |
+| 6 | `CDIEngine` + `--llm-filter` gpt-5-nano | LOSE | Filter strips specificity upgrades |
+| 7 | `CDIEngine` + `--pathology-scan` (Phase E v1) | **In flight** | Targets cancer/pathology cluster |
 
-The agentic runner replicates the Anthropic-built `cdi-agent` shape (multi-turn tool use, structured `report_diagnoses` tool, ICD-10 format-validation step) on Stanford's PHI-safe Bedrock endpoint — not via the Claude Agent SDK (which requires `api.anthropic.com`), but via a custom loop on top of `_call_bedrock` in `cdi_engine.py`.
+The agentic runner replicates the Anthropic-built `cdi-agent` shape (multi-turn tool use, structured `report_diagnoses` tool, ICD-10 format-validation step) on Stanford's PHI-safe Bedrock endpoint — built directly on `_call_bedrock` in `cdi_engine.py` rather than via the Claude Agent SDK (which hardcodes `api.anthropic.com`).
+
+## Data-Type Gap
+
+Currently we ingest one data type: **clinical notes** (11 sub-types via `cdi_expanded_notes_eval.csv`). SmarterDx ingests nine — including structured lab results, MAR (medication administration), imaging results, and **pathology results** as a dedicated feed. Many CDI rules (electrolyte triggers, sepsis criteria, blood-loss anemia thresholds) require structured data we don't have. **More data is likely the highest-EV next bet** — bigger than any further prompt or filter optimisation. See PHASE_E_PATHOLOGY_DESIGN.md §1.
 
 ## What Needs Doing Next
 

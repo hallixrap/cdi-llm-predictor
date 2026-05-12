@@ -108,3 +108,26 @@ scripts/deidentify_notes.py
 scripts/evaluate_rcc_accuracy.py
 scripts/fix_rcc_sections.py
 scripts/retry_failed_cases.py
+
+# Pre-existing local artifacts (kept local, never committed)
+# These accumulated during earlier exploration; deliberately not in git.
+analysis_script.py
+scripts/bigquery_export.py
+scripts/bigquery_export_v2.py
+scripts/bigquery_export_v3.py
+scripts/cdi_predictor_v2.py
+scripts/coding_intelligence.py
+scripts/em_engine.py
+scripts/parse_cdi_full_dataset.py
+scripts/run_full_eval.py
+scripts/stitch_chunks.py
+
+# Web demo iterations (kept local — current demo is web_demo/app.py only)
+web_demo/IMPLEMENTATION_SUMMARY.md
+web_demo/QUICKSTART_v2.md
+web_demo/README_v2.md
+web_demo/app_v2.py
+web_demo/app_v3.py
+web_demo/app_v4.py
+web_demo/coding_intelligence_demo.html
+web_demo/demo_standalone.html

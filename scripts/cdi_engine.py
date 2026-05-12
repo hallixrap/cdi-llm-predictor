@@ -799,6 +799,151 @@ def _filter_already_documented(predictions: List[Dict],
 
 
 # ===========================================================================
+# LLM-BASED ALREADY-DOCUMENTED FILTER (Stage 5 — 10 May 2026)
+# ===========================================================================
+#
+# ⚠️  NEGATIVE RESULT — tested 11 May 2026, retained as opt-in (default OFF).
+# Kept in the codebase as a wiring template, not as a recommended default.
+# See NEGATIVE_RESULTS.md for the cross-judge data.
+#
+# Hypothesis (since disproven): the Jaccard filter is the precision wall.
+# Adding a second LLM-based pass should catch paraphrased duplicates the
+# Jaccard misses ("AKI" ≡ "acute renal failure") and drop ALREADY_CODED.
+#
+# What actually happened on 30-case paired test (v15 / v17 / v18 each with
+# --llm-filter, judged by both gpt-5 and opus):
+#   - Recall dropped 9-12pp across ALL three variants
+#   - LEGITIMATE_CDI dropped (or stayed flat) under both judges
+#   - Composite (R × LEG) WORSE for every config except marginal +0.6pp on
+#     v18 under Opus (where v18 was already the floor at 3.8%)
+#
+# Mechanism: gpt-5-nano can't distinguish specificity upgrades. It sees
+# "severe sepsis with organ dysfunction" and "sepsis" as equivalent, then
+# filters out the clinically-valuable specific version. Net effect: more
+# legitimate findings filtered than already-coded paraphrases caught.
+#
+# Things worth retrying if revisited:
+#   - filter_model="claude-opus-4-7" — Opus knows specificity nuance better,
+#     might preserve upgrades. Cost ~10x but if it works, would be the
+#     filter for production. We did NOT test this on 11 May.
+#   - Rule-based pre-filter (only run LLM check on borderline Jaccard
+#     scores 0.50-0.75 instead of all surviving predictions).
+#   - Skip-list of specificity markers ("severe", "acute on chronic",
+#     "with organ dysfunction") that exempt a prediction from filtering.
+#
+# The filter runs ONE batched call per case after the Jaccard filter.
+# Default OFF. Enable with --llm-filter on the evaluator.
+
+LLM_FILTER_SYSTEM = """You are a CDI specialist. You will see (A) a list of conditions already documented in a patient's discharge summary and (B) a list of candidate diagnoses the model wants to query.
+
+Your job: identify which candidates are ALREADY DOCUMENTED in any wording in list A — and should be filtered out.
+
+Rules:
+- Mark as DUPLICATE if the candidate names the same clinical condition as anything in list A, even with different wording. Example: "acute renal failure" ≡ "AKI" ≡ "acute kidney injury".
+- KEEP (do NOT mark as duplicate) if the candidate adds clinically relevant specificity that would change the ICD-10 code. Example: documented "sepsis" + candidate "severe sepsis with organ dysfunction" → KEEP. Documented "heart failure" + candidate "acute on chronic systolic heart failure" → KEEP.
+- KEEP if uncertain — err on the side of letting the CDI specialist see it.
+
+Return JSON only:
+{"duplicates": [list of candidate numbers to filter out]}
+"""
+
+
+def _llm_already_documented_filter(predictions: List[Dict],
+                                    documented: List[str],
+                                    api_key: str,
+                                    filter_model: str = "gpt-5-nano",
+                                    full_text: Optional[str] = None
+                                    ) -> Tuple[List[Dict], List[Dict]]:
+    """LLM-based already-documented filter. One batched call per case.
+
+    Runs AFTER the Jaccard filter — only sees predictions that survived
+    that stage. The role is to catch paraphrased duplicates the Jaccard
+    couldn't (e.g., "acute renal failure" vs "AKI") without false-positive
+    filtering on legitimate specificity upgrades.
+
+    Returns (kept, filtered) — same shape as _filter_already_documented.
+    On any error (API failure, JSON parse failure, etc), passes predictions
+    through unfiltered with a log. Never silently drops on error.
+
+    Args:
+        predictions: predictions surviving the Jaccard filter
+        documented: extracted documented diagnoses from discharge summary
+        api_key: Stanford API key
+        filter_model: model to use for the equivalence judgment.
+                      Default gpt-5-nano (cheap, fast). claude-opus-4-7
+                      gives stricter results (closer to the production
+                      precision judge's ALREADY_CODED detection).
+        full_text: if provided, included as context so the LLM can also
+                   spot phrasings only present in the body of the
+                   discharge summary (not just the diagnosis sections).
+    """
+    if not predictions or not documented:
+        return predictions, []
+
+    # Build numbered candidate list
+    cand_lines = []
+    for i, p in enumerate(predictions, 1):
+        dx = p.get("diagnosis", "")
+        cand_lines.append(f"{i}. {dx}")
+    cand_str = "\n".join(cand_lines)
+
+    doc_str = "\n".join(f"- {d}" for d in documented)
+
+    # Optionally include a snippet of the discharge summary so the LLM has
+    # narrative context (Stanford sometimes lists conditions in nutrition /
+    # problem-list sections that don't show up in the structured extractor).
+    body_str = ""
+    if full_text:
+        body_str = f"\n\nDISCHARGE SUMMARY CONTEXT (first 4000 chars):\n{full_text[:4000]}"
+
+    user = (
+        f"(A) DOCUMENTED CONDITIONS (already in this patient's discharge summary):\n"
+        f"{doc_str}\n\n"
+        f"(B) CANDIDATE DIAGNOSES (the model wants to query these):\n"
+        f"{cand_str}"
+        f"{body_str}\n\n"
+        f'Return JSON only: {{"duplicates": [candidate numbers from (B) that are already documented in (A) or the discharge summary context]}}'
+    )
+
+    msgs = [
+        {"role": "system", "content": LLM_FILTER_SYSTEM},
+        {"role": "user", "content": user},
+    ]
+
+    try:
+        raw = _call_llm(msgs, api_key, model=filter_model, max_tokens=2000)
+    except Exception as e:
+        print(f"    LLM filter call failed (pass-through): {e}")
+        return predictions, []
+
+    # Parse JSON response — be lenient about surrounding text
+    import re as _re
+    m = _re.search(r"\{[^{}]*\"duplicates\"[^{}]*\}", raw, _re.DOTALL)
+    if not m:
+        print(f"    LLM filter: no JSON in response, pass-through: {raw[:200]}")
+        return predictions, []
+    try:
+        parsed = json.loads(m.group(0))
+        dup_idx = set(int(x) for x in parsed.get("duplicates", []) if isinstance(x, (int, str)))
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"    LLM filter: parse failed ({e}), pass-through")
+        return predictions, []
+
+    kept = []
+    filtered = []
+    for i, p in enumerate(predictions, 1):
+        if i in dup_idx:
+            pcopy = dict(p)
+            pcopy["filter_reason"] = "LLM filter: semantically equivalent to documented"
+            pcopy["filter_stage"] = "llm"
+            filtered.append(pcopy)
+        else:
+            kept.append(p)
+
+    return kept, filtered
+
+
+# ===========================================================================
 # RESPONSE PARSING
 # ===========================================================================
 
@@ -956,7 +1101,11 @@ class CDIEngine:
     """Production CDI prediction engine."""
 
     def __init__(self, api_key: str, model: str = "gpt-5",
-                 prompt_variant: str = "v15_cdi_agent_style"):
+                 prompt_variant: str = "v15_cdi_agent_style",
+                 llm_filter: bool = False,
+                 filter_model: str = "gpt-5-nano",
+                 pathology_scan: bool = False,
+                 pathology_scan_model: Optional[str] = None):
         self.api_key = api_key
         self.model = model
         self.prompt_variant = prompt_variant
@@ -969,6 +1118,19 @@ class CDIEngine:
         # Back-compat aliases used by single-pass code paths
         self.system_prompt = self.variant.get("system", "")
         self.user_prefix = self.variant.get("user_prefix", "")
+        # LLM-based already-documented filter — runs after the Jaccard filter
+        # to catch paraphrased duplicates ("AKI" vs "acute renal failure" etc).
+        # Disabled by default for back-compat. Enable with --llm-filter.
+        # TESTED NEGATIVE 11 May 2026 — see NEGATIVE_RESULTS.md.
+        self.llm_filter = llm_filter
+        self.filter_model = filter_model
+        # Phase E v1 — pathology gap scan. Runs an additional focused LLM
+        # pass on pathology-report-style segments in the notes, surfaces
+        # tissue-confirmed diagnoses not in the discharge documentation.
+        # Off by default. Enable with --pathology-scan.
+        self.pathology_scan = pathology_scan
+        # Default to main model if not specified — runs on the same gateway
+        self.pathology_scan_model = pathology_scan_model or model
 
     def _build_user_content(self, discharge_summary: str,
                             progress_note: Optional[str] = None,
@@ -1326,6 +1488,58 @@ class CDIEngine:
         predictions, filtered_out = _filter_already_documented(
             predictions, documented, full_text=discharge_summary)
 
+        # Optional LLM-based already-documented filter (Stage 5 — 10 May 2026).
+        # Catches paraphrased duplicates the Jaccard filter misses (e.g.
+        # "AKI" ≡ "acute renal failure"). One batched call per case;
+        # gpt-5-nano default keeps this at ~$0.0001/case. Off by default.
+        filtered_by_llm: List[Dict] = []
+        if self.llm_filter and documented:
+            predictions, filtered_by_llm = _llm_already_documented_filter(
+                predictions, documented, self.api_key,
+                filter_model=self.filter_model,
+                full_text=discharge_summary,
+            )
+            filtered_out = filtered_out + filtered_by_llm
+
+        # Phase E v1 — pathology gap scan (10 May 2026).
+        # Targets the cancer_pathology cluster (88 GT queries, 19% recall —
+        # biggest single recall lever). Detects pathology-report-style
+        # segments in available notes, sends a focused LLM call to extract
+        # tissue-confirmed diagnoses NOT in the discharge documentation,
+        # merges the gaps into predictions. Dedup against existing predictions
+        # by normalised diagnosis name to avoid double-counting.
+        phase_e_info = {"called": False, "skip_reason": None,
+                        "segments_found": 0, "gaps_added": 0}
+        if self.pathology_scan:
+            from pathology_scanner import scan_for_pathology_gaps
+            scan_result = scan_for_pathology_gaps(
+                discharge_summary=discharge_summary,
+                api_key=self.api_key,
+                documented_diagnoses=documented,
+                procedure_notes=procedure_notes,
+                consult_notes=consult_notes,
+                progress_notes=progress_notes,
+                ip_consult_note=ip_consult_note,
+                hp_note=hp_note,
+                ed_note=ed_note,
+                model=self.pathology_scan_model,
+            )
+            phase_e_info["called"] = scan_result["scan_called"]
+            phase_e_info["skip_reason"] = scan_result["skip_reason"]
+            phase_e_info["segments_found"] = scan_result["segments_found"]
+
+            # Merge gaps — dedup against existing predictions by normalised name
+            existing_norms = {_normalise_diagnosis(p.get("diagnosis", ""))
+                              for p in predictions}
+            new_gaps = []
+            for g in scan_result["gaps"]:
+                gnorm = _normalise_diagnosis(g.get("diagnosis", ""))
+                if gnorm and gnorm not in existing_norms:
+                    new_gaps.append(g)
+                    existing_norms.add(gnorm)
+            predictions = predictions + new_gaps
+            phase_e_info["gaps_added"] = len(new_gaps)
+
         # Enrich with DRG impact, categories, revenue estimates
         enriched = self._enrich(predictions)
 
@@ -1369,6 +1583,11 @@ class CDIEngine:
                 "engine_version": "1.2.0",
                 "prompt_variant": self.prompt_variant,
                 "voting": self.predict_method == "single_pass" and mode != "fast",
+                "llm_filter": self.llm_filter,
+                "filter_model": self.filter_model if self.llm_filter else None,
+                "filtered_by_llm_count": len(filtered_by_llm),
+                "pathology_scan": self.pathology_scan,
+                "pathology_scan_info": phase_e_info,
                 "filtered_already_documented": filtered_out,
                 "filtered_count": len(filtered_out),
                 "documented_diagnoses_found": len(documented),
